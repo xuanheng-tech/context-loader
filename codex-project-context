@@ -1,0 +1,3 @@
+#!/usr/bin/env python3
+from context_loader.cli import main
+raise SystemExit(main())
