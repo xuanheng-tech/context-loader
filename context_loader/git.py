@@ -62,6 +62,10 @@ _GIT_ENVIRONMENT = MappingProxyType(
 class ContextLoaderError(Exception):
     """A safe, user-facing context-loader failure."""
 
+    def __init__(self, message: str, *, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
 
 @dataclass(frozen=True, slots=True)
 class GitResult:
@@ -137,13 +141,13 @@ def validate_repository(raw_path: str) -> Path:
     """Return the canonical root of an explicit non-bare Git worktree."""
     candidate = Path(raw_path)
     if not candidate.is_absolute():
-        raise ContextLoaderError("--repo must be an absolute path")
+        raise ContextLoaderError("--repo must be an absolute path", exit_code=2)
     try:
         canonical = candidate.resolve(strict=True)
     except (OSError, RuntimeError):
-        raise ContextLoaderError("--repo must name an existing directory") from None
+        raise ContextLoaderError("--repo must name an existing directory", exit_code=2) from None
     if not canonical.is_dir():
-        raise ContextLoaderError("--repo must name an existing directory")
+        raise ContextLoaderError("--repo must name an existing directory", exit_code=2)
 
     bare = _run_git(canonical, ("rev-parse", "--is-bare-repository"), check=False)
     root = _run_git(
@@ -152,17 +156,23 @@ def validate_repository(raw_path: str) -> Path:
         check=False,
     )
     if bare.returncode != 0 or root.returncode != 0:
-        raise ContextLoaderError("--repo must be the canonical root of a non-bare Git worktree")
+        raise ContextLoaderError(
+            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
+        )
     if _without_one_line_ending(bare.stdout) != b"false":
-        raise ContextLoaderError("--repo must be the canonical root of a non-bare Git worktree")
+        raise ContextLoaderError(
+            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
+        )
     try:
         discovered = Path(_decode_path(_without_one_line_ending(root.stdout))).resolve(strict=True)
     except (OSError, RuntimeError):
         raise ContextLoaderError(
-            "--repo must be the canonical root of a non-bare Git worktree"
+            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
         ) from None
     if discovered != canonical:
-        raise ContextLoaderError("--repo must be the canonical root of a non-bare Git worktree")
+        raise ContextLoaderError(
+            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
+        )
     return canonical
 
 

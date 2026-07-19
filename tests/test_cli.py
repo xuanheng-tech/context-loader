@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -14,6 +15,7 @@ GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_OPTIONAL_LOCKS": "0",
     "HOME": "/nonexistent",
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
@@ -69,6 +71,31 @@ def _run(repo: str | Path, *, cwd: Path | str = "/") -> subprocess.CompletedProc
     )
 
 
+def _section(output: str, title: str, next_title: str | None) -> str:
+    content = output.split(f"## {title}\n\n", 1)[1]
+    if next_title is not None:
+        content = content.split(f"\n\n## {next_title}", 1)[0]
+    return content
+
+
+def _git_file_metadata(repo: Path) -> tuple[tuple[str, int, int, int], ...]:
+    git_directory = repo / ".git"
+    metadata: list[tuple[str, int, int, int]] = []
+    for path in sorted(git_directory.rglob("*")):
+        if not path.is_file():
+            continue
+        details = path.stat()
+        metadata.append(
+            (
+                path.relative_to(git_directory).as_posix(),
+                details.st_mode,
+                details.st_size,
+                details.st_mtime_ns,
+            )
+        )
+    return tuple(metadata)
+
+
 def test_clean_repository_and_missing_upstream(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     head = _git(repo, "rev-parse", "HEAD").decode("ascii").strip()
@@ -88,7 +115,7 @@ def test_clean_repository_and_missing_upstream(tmp_path: Path) -> None:
     assert "- Worktree: `clean`\n" in output
     assert "### Working Tree Changes\n\nNo changes.\n" in output
     assert f"- `{head[:12]}` · " in output
-    assert output.endswith(" · baseline\n")
+    assert " · baseline\n\n## Directory Tree\n" in output
 
 
 def test_dirty_paths_are_sorted_and_include_tracked_and_untracked(tmp_path: Path) -> None:
@@ -192,7 +219,7 @@ def test_detached_and_unborn_head_labels(tmp_path: Path) -> None:
     assert unborn_result.returncode == 0
     assert b"- Branch: `unborn`\n" in unborn_result.stdout
     assert b"- HEAD: `unborn`\n" in unborn_result.stdout
-    assert unborn_result.stdout.endswith(b"## Recent Commits\n\nNo commits.\n")
+    assert b"## Recent Commits\n\nNo commits.\n\n## Directory Tree\n" in unborn_result.stdout
 
 
 def test_change_list_is_limited_to_one_hundred_entries(tmp_path: Path) -> None:
@@ -205,7 +232,7 @@ def test_change_list_is_limited_to_one_hundred_entries(tmp_path: Path) -> None:
     assert result.returncode == 0
     output = result.stdout.decode("utf-8")
     change_section = output.split("### Working Tree Changes\n\n", 1)[1].split(
-        "\n\n## Recent Commits", 1
+        "\n\n## Development Instructions", 1
     )[0]
     assert change_section.count("\n- `?? ") == 99
     assert change_section.startswith("- `?? ")
@@ -225,7 +252,7 @@ def test_change_list_is_limited_to_four_kibibytes(tmp_path: Path) -> None:
     assert result.returncode == 0
     output = result.stdout.decode("utf-8")
     change_section = output.split("### Working Tree Changes\n\n", 1)[1].split(
-        "\n\n## Recent Commits", 1
+        "\n\n## Development Instructions", 1
     )[0]
     path_lines = [line for line in change_section.splitlines() if line.startswith("- `?? ")]
     assert len(path_lines) < 30
@@ -255,11 +282,368 @@ def test_recent_commits_are_limited_to_eight(tmp_path: Path) -> None:
     result = _run(repo)
 
     assert result.returncode == 0
-    recent_section = result.stdout.decode("utf-8").split("## Recent Commits\n\n", 1)[1]
+    recent_section = _section(result.stdout.decode("utf-8"), "Recent Commits", "Directory Tree")
     assert len(recent_section.splitlines()) == 8
     assert " · baseline\n" not in recent_section
     assert " · update-7\n" in recent_section
-    assert " · update-0\n" in recent_section
+    assert recent_section.endswith(" · update-0")
+
+
+def test_all_supported_root_files_render_in_fixed_order_with_commands(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Rules\nUse care.\n", encoding="utf-8")
+    (repo / "README.md").write_bytes(b"# Demo\r\nOverview.\r\n")
+    (repo / "pyproject.toml").write_text(
+        """[project]
+name = "demo"
+
+[project.scripts]
+zeta = "pkg:zeta"
+alpha = "pkg:alpha"
+
+[project.gui-scripts]
+gui = "pkg:gui"
+""",
+        encoding="utf-8",
+    )
+    (repo / "justfile").write_text(
+        """set positional-arguments := true
+default:
+build mode="debug":
+_internal:
+[private]
+secret:
+codex-project-context *args:
+    echo ignored
+""",
+        encoding="utf-8",
+    )
+    (repo / "Justfile").write_text("fallback:\n", encoding="utf-8")
+    (repo / "package.json").write_text(
+        '{"scripts":{"zeta":"node z.js","alpha":"node a.js"},"name":"demo"}\n',
+        encoding="utf-8",
+    )
+    (repo / "Makefile").write_text(
+        ".PHONY: all\nVAR := value\nall: build\nbuild test: dependency\npattern%:\n",
+        encoding="utf-8",
+    )
+    (repo / "Cargo.toml").write_text('[package]\nname = "demo"\n', encoding="utf-8")
+    (repo / "go.mod").write_text("module example.invalid/demo\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    titles = [
+        "Git State",
+        "Development Instructions",
+        "Project Overview",
+        "Declared Commands",
+        "Project Entry Files",
+        "Recent Commits",
+        "Directory Tree",
+    ]
+    assert [output.index(f"## {title}\n") for title in titles] == sorted(
+        output.index(f"## {title}\n") for title in titles
+    )
+    assert "Source: `AGENTS.md`\n\n```markdown\n# Rules\nUse care.\n```" in output
+    assert "Source: `README.md`\n\n```markdown\n# Demo\nOverview.\n```" in output
+    commands = _section(output, "Declared Commands", "Project Entry Files")
+    expected_commands = [
+        "- `alpha` → `pkg:alpha`",
+        "- `gui` → `pkg:gui`",
+        "- `zeta` → `pkg:zeta`",
+        "- `just build`",
+        "- `just codex-project-context`",
+        "- `just default`",
+        "- `npm run alpha` → `node a.js`",
+        "- `npm run zeta` → `node z.js`",
+        "- `make all`",
+        "- `make build`",
+        "- `make test`",
+    ]
+    assert commands.splitlines() == expected_commands
+    entries = _section(output, "Project Entry Files", "Recent Commits")
+    assert "### `justfile`" in entries
+    assert "### `Justfile`" not in entries
+    assert "```toml\n[project]" in entries
+    assert '```json\n{"scripts"' in entries
+    assert "```make\nset positional-arguments := true" in entries
+    assert "```text\nmodule example.invalid/demo" in entries
+    assert "just fallback" not in commands
+
+
+def test_missing_root_files_ignore_nested_candidates(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    nested = repo / "nested"
+    nested.mkdir()
+    (nested / "AGENTS.md").write_text("NESTED INSTRUCTIONS MUST NOT BE READ\n", encoding="utf-8")
+    (nested / "README.md").write_text("NESTED OVERVIEW MUST NOT BE READ\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    assert _section(output, "Development Instructions", "Project Overview") == (
+        "Source: `AGENTS.md`\n\nNot present."
+    )
+    assert _section(output, "Project Overview", "Declared Commands") == (
+        "Source: `README.md`\n\nNot present."
+    )
+    entries = _section(output, "Project Entry Files", "Recent Commits")
+    assert entries.count("Not present.") == 6
+    assert "### `Justfile`" in entries
+    assert "NESTED INSTRUCTIONS" not in output
+    assert "NESTED OVERVIEW" not in output
+    assert "No supported command declarations found." in output
+
+
+def test_lowercase_justfile_takes_precedence_over_Justfile(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "justfile").write_text("lower:\n", encoding="utf-8")
+    (repo / "Justfile").write_text("upper:\n", encoding="utf-8")
+
+    output = _run(repo).stdout.decode("utf-8")
+
+    entries = _section(output, "Project Entry Files", "Recent Commits")
+    commands = _section(output, "Declared Commands", "Project Entry Files")
+    assert "### `justfile`" in entries
+    assert "### `Justfile`" not in entries
+    assert commands == "- `just lower`"
+
+
+def test_symlink_candidates_are_skipped_without_following_outside_target(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("OUTSIDE SECRET MUST NOT APPEAR\n", encoding="utf-8")
+    (repo / "AGENTS.md").symlink_to(outside)
+    (repo / "README.md").symlink_to(repo / "tracked.txt")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    assert "Source: `AGENTS.md`\n\nSkipped: symlink." in output
+    assert "Source: `README.md`\n\nSkipped: symlink." in output
+    assert "OUTSIDE SECRET MUST NOT APPEAR" not in output
+
+
+def test_unsupported_text_and_non_regular_candidates_are_skipped(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_bytes(b"safe line\n" * 2_000 + b"\xff")
+    (repo / "README.md").write_bytes(b"safe\0hidden")
+    (repo / "pyproject.toml").mkdir()
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    assert "Source: `AGENTS.md`\n\nSkipped: unsupported text encoding." in output
+    assert "Source: `README.md`\n\nSkipped: unsupported text encoding." in output
+    entries = _section(output, "Project Entry Files", "Recent Commits")
+    assert "### `pyproject.toml`\n\nSkipped: not a regular file." in entries
+    assert "hidden" not in output
+
+
+def test_single_file_truncation_is_utf8_and_line_safe(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    line = f"{'🙂' * 200}\n"
+    (repo / "AGENTS.md").write_text(f"{line * 30}END MUST NOT APPEAR\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    instructions = _section(output, "Development Instructions", "Project Overview")
+    body = instructions.split("```markdown\n", 1)[1].rsplit("\n```", 1)[0]
+    assert "END MUST NOT APPEAR" not in output
+    assert body.endswith("… truncated by context-loader …")
+    assert len(body.encode()) <= 16 * 1024
+
+
+def test_entry_file_content_has_per_file_and_aggregate_limits(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    payload = "x\n" * 4_096
+    for name in ("pyproject.toml", "justfile", "package.json", "Makefile", "Cargo.toml", "go.mod"):
+        (repo / name).write_text(payload, encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    entries = _section(result.stdout.decode("utf-8"), "Project Entry Files", "Recent Commits")
+    assert entries.count(payload) == 3
+    for name in ("Makefile", "Cargo.toml", "go.mod"):
+        subsection = entries.split(f"### `{name}`\n\n", 1)[1]
+        assert subsection.startswith(
+            "```" + ("toml" if name == "Cargo.toml" else "make" if name == "Makefile" else "text")
+        )
+        assert "… truncated by context-loader …" in subsection.split("### `", 1)[0]
+
+
+def test_global_output_limit_omits_late_sections_without_invalid_utf8(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "tracked.txt").write_text("large subject\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    huge_subject = "s" * 110_000
+    _git(
+        repo,
+        "-c",
+        "user.name=Codex Test",
+        "-c",
+        "user.email=codex-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        huge_subject,
+    )
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    assert len(result.stdout) <= 98_304
+    output = result.stdout.decode("utf-8")
+    assert "## Recent Commits\n\nOmitted: global output limit reached." in output
+    assert "## Directory Tree\n\nOmitted: global output limit reached." in output
+
+
+def test_file_fence_is_longer_than_backticks_in_source(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_text("before\n```\nafter\n", encoding="utf-8")
+
+    output = _run(repo).stdout.decode("utf-8")
+
+    overview = _section(output, "Project Overview", "Declared Commands")
+    assert "````markdown\nbefore\n```\nafter\n````" in overview
+
+
+def test_command_extractors_are_conservative_and_parse_failures_are_local(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "pyproject.toml").write_text("[project.scripts\nbroken = true\n", encoding="utf-8")
+    (repo / "package.json").write_text("{broken json\n", encoding="utf-8")
+    (repo / "justfile").write_text(
+        """# comment
+set value := "x"
+default:
+build target="release":
+_private:
+[private]
+secret:
+    indented:
++unsupported:
+""",
+        encoding="utf-8",
+    )
+    (repo / "Makefile").write_text(
+        """# comment
+.PHONY: all
+VALUE := x
+all: build
+build test: dependency
+pattern%:
+$(GENERATED):
+""",
+        encoding="utf-8",
+    )
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    commands = _section(output, "Declared Commands", "Project Entry Files")
+    assert commands.splitlines() == [
+        "- `pyproject.toml`: unable to parse command declarations.",
+        "- `just build`",
+        "- `just default`",
+        "- `package.json`: unable to parse command declarations.",
+        "- `make all`",
+        "- `make build`",
+        "- `make test`",
+    ]
+    entries = _section(output, "Project Entry Files", "Recent Commits")
+    assert "[project.scripts" in entries
+    assert "{broken json" in entries
+
+
+def test_declared_commands_have_an_eight_kibibyte_limit(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    scripts = {f"cmd{index:03}": f"node {'x' * 20}" for index in range(180)}
+    package = json.dumps({"scripts": scripts}, separators=(",", ":")) + "\n"
+    assert len(package.encode()) < 8 * 1024
+    (repo / "package.json").write_text(package, encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    commands = _section(result.stdout.decode("utf-8"), "Declared Commands", "Project Entry Files")
+    assert len(commands.encode()) <= 8 * 1024
+    assert commands.endswith("… truncated by context-loader …")
+
+
+def test_directory_tree_depth_sorting_symlink_and_unreadable_directory(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    adir = repo / "adir"
+    bdir = repo / "bdir"
+    locked = repo / "locked"
+    adir.mkdir()
+    bdir.mkdir()
+    locked.mkdir()
+    subdir = adir / "subdir"
+    subdir.mkdir()
+    (subdir / "too-deep.txt").write_text("hidden from tree\n", encoding="utf-8")
+    (adir / "z-child.txt").write_text("child\n", encoding="utf-8")
+    (repo / "a-root.txt").write_text("root\n", encoding="utf-8")
+    (repo / "z-root.txt").write_text("root\n", encoding="utf-8")
+    (repo / "link").symlink_to(adir, target_is_directory=True)
+    locked.chmod(0)
+    try:
+        result = _run(repo)
+    finally:
+        locked.chmod(0o700)
+
+    assert result.returncode == 0
+    tree = _section(result.stdout.decode("utf-8"), "Directory Tree", None)
+    body = tree.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
+    lines = body.splitlines()
+    assert lines.index(".git/") < lines.index("adir/") < lines.index("bdir/")
+    assert lines.index("adir/subdir/") < lines.index("adir/z-child.txt")
+    assert lines.index("bdir/") < lines.index("a-root.txt") < lines.index("z-root.txt")
+    assert "link@" in lines
+    assert "too-deep.txt" not in body
+    assert "locked/ [Skipped: unreadable.]" in lines
+    assert ".git/HEAD" not in body
+
+
+def test_directory_tree_item_limit_uses_truncation_marker(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    for index in range(305):
+        (repo / f"tree-{index:03}.txt").write_text("x\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    tree = _section(result.stdout.decode("utf-8"), "Directory Tree", None)
+    body = tree.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
+    lines = body.splitlines()
+    assert lines[-1] == "… truncated by context-loader …"
+    assert len(lines[:-1]) <= 300
+    assert len(body.encode()) <= 12 * 1024
+
+
+def test_cli_does_not_change_porcelain_or_git_metadata(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_text("# Read only\n", encoding="utf-8")
+    before_status = _git(repo, "status", "--porcelain=v1", "-z")
+    before_metadata = _git_file_metadata(repo)
+
+    result = _run(repo)
+
+    after_status = _git(repo, "status", "--porcelain=v1", "-z")
+    after_metadata = _git_file_metadata(repo)
+    assert result.returncode == 0
+    assert before_status == after_status
+    assert before_metadata == after_metadata
 
 
 def test_configured_fsmonitor_is_not_executed(tmp_path: Path) -> None:
