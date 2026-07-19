@@ -1,12 +1,21 @@
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12.0"]
+build-backend = "uv_build"
+
 [project]
 name = "codex-project-context-loader"
 version = "0.1.0"
 description = "Render deterministic local Git context for Codex"
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
-[tool.uv]
-package = false
+[project.scripts]
+codex-project-context = "context_loader.cli:main"
+
+[tool.uv.build-backend]
+module-name = "context_loader"
+module-root = ""
 
 [dependency-groups]
 dev = [

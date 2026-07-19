@@ -187,7 +187,7 @@ def _head_and_branch(repo: Path) -> tuple[str, str, str | None]:
     if resolved_head.returncode != 0:
         if branch_name is None:
             raise ContextLoaderError("unable to read repository Git state")
-        return "unborn", "unborn", branch_name
+        return branch_name, "unborn", branch_name
 
     head = _decode_text(_without_one_line_ending(resolved_head.stdout))
     if _OID_PATTERN.fullmatch(head) is None:

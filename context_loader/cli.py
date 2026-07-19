@@ -6,6 +6,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+from . import __version__
 from .collect import collect_project_context
 from .git import ContextLoaderError, collect_repository_state
 from .render import render_markdown
@@ -23,6 +24,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Render deterministic local Git context as Markdown.",
         allow_abbrev=False,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--repo", required=True, help="absolute Git worktree root")
     return parser
 

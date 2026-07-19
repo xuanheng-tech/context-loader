@@ -4,9 +4,14 @@ import json
 import os
 import stat
 import subprocess
+import tomllib
+from importlib import import_module
 from pathlib import Path
 
 import pytest
+
+from context_loader import __version__
+from context_loader.cli import main
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLI = PROJECT_ROOT / "codex-project-context"
@@ -94,6 +99,31 @@ def _git_file_metadata(repo: Path) -> tuple[tuple[str, int, int, int], ...]:
             )
         )
     return tuple(metadata)
+
+
+def test_version_output_and_packaging_metadata_are_consistent() -> None:
+    result = subprocess.run(
+        [os.fspath(CLI), "--version"],
+        cwd="/",
+        env=GIT_ENV,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    entry_point = project["project"]["scripts"]["codex-project-context"]
+    module_name, attribute = entry_point.split(":", 1)
+
+    assert result.returncode == 0
+    assert result.stdout == b"codex-project-context 0.1.0\n"
+    assert result.stderr == b""
+    assert project["project"]["version"] == __version__ == "0.1.0"
+    assert entry_point == "context_loader.cli:main"
+    assert getattr(import_module(module_name), attribute) is main
+    assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (
+        "#!/usr/bin/env python3\nfrom context_loader.cli import main\nraise SystemExit(main())\n"
+    )
 
 
 def test_clean_repository_and_missing_upstream(tmp_path: Path) -> None:
@@ -205,21 +235,50 @@ def test_configured_but_missing_upstream_ref_is_not_available(tmp_path: Path) ->
     assert "- Ahead / behind: `not available`\n" in output
 
 
-def test_detached_and_unborn_head_labels(tmp_path: Path) -> None:
-    detached = _repository(tmp_path / "detached")
+def test_detached_head_label(tmp_path: Path) -> None:
+    detached = _repository(tmp_path)
+    head = _git(detached, "rev-parse", "HEAD").decode("ascii").strip()
     _git(detached, "checkout", "--quiet", "--detach")
+
     detached_result = _run(detached)
+
     assert detached_result.returncode == 0
     assert b"- Branch: `detached`\n" in detached_result.stdout
+    assert f"- HEAD: `{head}`\n".encode() in detached_result.stdout
 
-    unborn_root = tmp_path / "unborn"
-    unborn_root.mkdir()
-    unborn = _repository(unborn_root, commit=False)
+
+def test_unborn_empty_repository_reports_symbolic_branch(tmp_path: Path) -> None:
+    unborn = _repository(tmp_path, commit=False)
+    _git(unborn, "symbolic-ref", "HEAD", "refs/heads/release")
+
     unborn_result = _run(unborn)
+
     assert unborn_result.returncode == 0
-    assert b"- Branch: `unborn`\n" in unborn_result.stdout
+    assert b"- Branch: `release`\n" in unborn_result.stdout
     assert b"- HEAD: `unborn`\n" in unborn_result.stdout
+    assert b"- Upstream: `not configured`\n" in unborn_result.stdout
+    assert b"- Ahead / behind: `not available`\n" in unborn_result.stdout
     assert b"## Recent Commits\n\nNo commits.\n\n## Directory Tree\n" in unborn_result.stdout
+
+
+def test_unborn_repository_with_untracked_project_files(tmp_path: Path) -> None:
+    unborn = _repository(tmp_path, commit=False)
+    (unborn / "README.md").write_text("# Unborn project\n", encoding="utf-8")
+    (unborn / "pyproject.toml").write_text(
+        '[project.scripts]\ndemo = "example:main"\n', encoding="utf-8"
+    )
+
+    result = _run(unborn)
+
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    assert "- Branch: `main`\n" in output
+    assert "- HEAD: `unborn`\n" in output
+    assert "- Worktree: `dirty`\n" in output
+    assert "- `?? README.md`\n- `?? pyproject.toml`\n" in output
+    assert "```markdown\n# Unborn project\n```" in output
+    assert "- `demo` → `example:main`" in output
+    assert "## Recent Commits\n\nNo commits.\n" in output
 
 
 def test_change_list_is_limited_to_one_hundred_entries(tmp_path: Path) -> None:
