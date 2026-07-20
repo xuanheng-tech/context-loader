@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "codex-project-context-loader"
-version = "0.1.0"
+version = "0.1.1"
 description = "Render deterministic local Git context for Codex"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

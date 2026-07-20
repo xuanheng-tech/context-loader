@@ -7,10 +7,12 @@ library.
 
 ## Install
 
+Current release: `0.1.1`.
+
 Install a release wheel with `uv`:
 
 ```bash
-uv tool install /path/to/codex_project_context_loader-0.1.0-py3-none-any.whl
+uv tool install /path/to/codex_project_context_loader-0.1.1-py3-none-any.whl
 ```
 
 The repository also retains `./codex-project-context` as a direct development entry point.
@@ -74,8 +76,12 @@ the remote.
 - An unborn working tree reports its symbolic branch name, such as `Branch: main`, and
   `HEAD: unborn`.
 - A detached HEAD reports `Branch: detached` and the resolved commit object ID.
-- Without an upstream, `Upstream: not configured` and `Ahead / behind: not available` are used.
-- Ahead/behind counts are computed only when the configured upstream ref is available locally.
+- `Upstream` is the current branch's configured tracking target. Without one,
+  `Upstream: not configured` is used.
+- A configured target such as `origin/main` may be shown before its commit is resolvable locally;
+  this is normal after cloning an empty remote.
+- `Ahead / behind: not available` means the commit relationship cannot currently be computed.
+  Counts are reported only when the configured upstream commit is available locally.
 
 ## Exit Codes
 
@@ -88,7 +94,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 0.1.1 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
 ignore-rule parsing, plugins, profiles, caches, databases, network services, MCP, APIs, daemons,
 GUIs, CI/CD, telemetry, or automatic updates.
 

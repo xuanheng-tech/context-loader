@@ -28,9 +28,9 @@ GIT_ENV = {
 }
 
 
-def _git(repo: Path, *arguments: str) -> bytes:
+def _git_process(*arguments: str) -> subprocess.CompletedProcess[bytes]:
     result = subprocess.run(
-        [GIT, "-C", os.fspath(repo), *arguments],
+        [GIT, *arguments],
         cwd="/",
         env=GIT_ENV,
         stdin=subprocess.DEVNULL,
@@ -38,6 +38,11 @@ def _git(repo: Path, *arguments: str) -> bytes:
         timeout=30,
         check=False,
     )
+    return result
+
+
+def _git(repo: Path, *arguments: str) -> bytes:
+    result = _git_process("-C", os.fspath(repo), *arguments)
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
     return result.stdout
 
@@ -112,13 +117,17 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
         check=False,
     )
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    lock_package = next(
+        package for package in lock["package"] if package["name"] == "codex-project-context-loader"
+    )
     entry_point = project["project"]["scripts"]["codex-project-context"]
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.0\n"
+    assert result.stdout == b"codex-project-context 0.1.1\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == __version__ == "0.1.0"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.1"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (
@@ -233,6 +242,124 @@ def test_configured_but_missing_upstream_ref_is_not_available(tmp_path: Path) ->
     output = result.stdout.decode("utf-8")
     assert "- Upstream: `origin/main`\n" in output
     assert "- Ahead / behind: `not available`\n" in output
+
+
+def test_empty_remote_clone_reports_configured_unresolved_upstream(tmp_path: Path) -> None:
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    _git(remote, "init", "--quiet", "--bare", "--initial-branch=main")
+    clone = tmp_path / "clone"
+
+    clone_result = _git_process("clone", "--quiet", os.fspath(remote), os.fspath(clone))
+
+    assert clone_result.returncode == 0, clone_result.stderr.decode("utf-8", errors="replace")
+    assert _git(clone, "symbolic-ref", "--quiet", "--short", "HEAD") == b"main\n"
+    assert _git(clone, "config", "--get", "branch.main.remote") == b"origin\n"
+    assert _git(clone, "config", "--get", "branch.main.merge") == b"refs/heads/main\n"
+    assert (
+        _git_process("-C", os.fspath(clone), "rev-parse", "--verify", "HEAD^{commit}").returncode
+        != 0
+    )
+    assert (
+        _git_process(
+            "-C", os.fspath(clone), "rev-parse", "--verify", "@{upstream}^{commit}"
+        ).returncode
+        != 0
+    )
+    before_status = _git(clone, "status", "--porcelain=v1", "-z")
+    before_metadata = _git_file_metadata(clone)
+
+    first = _run(clone)
+    second = _run(clone)
+
+    after_status = _git(clone, "status", "--porcelain=v1", "-z")
+    after_metadata = _git_file_metadata(clone)
+    assert first.returncode == second.returncode == 0
+    assert first.stderr == second.stderr == b""
+    assert first.stdout == second.stdout
+    assert len(first.stdout) <= 98_304
+    output = first.stdout.decode("utf-8")
+    assert "- Branch: `main`\n" in output
+    assert "- HEAD: `unborn`\n" in output
+    assert "- Upstream: `origin/main`\n" in output
+    assert "- Ahead / behind: `not available`\n" in output
+    assert before_status == after_status == b""
+    assert before_metadata == after_metadata
+
+
+def test_init_created_unborn_with_remote_has_no_upstream(tmp_path: Path) -> None:
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    _git(remote, "init", "--quiet", "--bare", "--initial-branch=main")
+    repo = _repository(tmp_path, commit=False)
+    _git(repo, "remote", "add", "origin", os.fspath(remote))
+
+    assert _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD") == b"main\n"
+    assert (
+        _git_process("-C", os.fspath(repo), "config", "--get", "branch.main.remote").returncode != 0
+    )
+    assert (
+        _git_process("-C", os.fspath(repo), "config", "--get", "branch.main.merge").returncode != 0
+    )
+    assert (
+        _git_process(
+            "-C", os.fspath(repo), "rev-parse", "--verify", "@{upstream}^{commit}"
+        ).returncode
+        != 0
+    )
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    assert result.stderr == b""
+    output = result.stdout.decode("utf-8")
+    assert "- Branch: `main`\n" in output
+    assert "- HEAD: `unborn`\n" in output
+    assert "- Upstream: `not configured`\n" in output
+    assert "- Ahead / behind: `not available`\n" in output
+
+
+def test_pushed_upstream_is_resolved_and_local_ahead_is_counted(tmp_path: Path) -> None:
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    _git(remote, "init", "--quiet", "--bare", "--initial-branch=main")
+    repo = _repository(tmp_path)
+    _git(repo, "remote", "add", "origin", os.fspath(remote))
+    _git(repo, "push", "--quiet", "--set-upstream", "origin", "main")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert _git(repo, "rev-parse", "--verify", "@{upstream}^{commit}").strip() == head
+    resolved_result = _run(repo)
+
+    assert resolved_result.returncode == 0
+    assert resolved_result.stderr == b""
+    resolved_output = resolved_result.stdout.decode("utf-8")
+    assert "- Upstream: `origin/main`\n" in resolved_output
+    assert "- Ahead / behind: `0 / 0`\n" in resolved_output
+
+    (repo / "tracked.txt").write_text("local ahead\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(
+        repo,
+        "-c",
+        "user.name=Codex Test",
+        "-c",
+        "user.email=codex-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "local ahead",
+    )
+
+    ahead_result = _run(repo)
+
+    assert ahead_result.returncode == 0
+    assert ahead_result.stderr == b""
+    ahead_output = ahead_result.stdout.decode("utf-8")
+    assert "- Upstream: `origin/main`\n" in ahead_output
+    assert "- Ahead / behind: `1 / 0`\n" in ahead_output
 
 
 def test_detached_head_label(tmp_path: Path) -> None:
