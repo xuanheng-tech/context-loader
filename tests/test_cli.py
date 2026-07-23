@@ -767,7 +767,11 @@ def test_declared_commands_have_an_eight_kibibyte_limit(tmp_path: Path) -> None:
     assert commands.endswith("… truncated by context-loader …")
 
 
-def test_directory_tree_depth_sorting_symlink_and_unreadable_directory(tmp_path: Path) -> None:
+def test_directory_tree_depth_sorting_symlink_and_unreadable_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsysbinary: pytest.CaptureFixture[bytes],
+) -> None:
     repo = _repository(tmp_path)
     adir = repo / "adir"
     bdir = repo / "bdir"
@@ -782,14 +786,23 @@ def test_directory_tree_depth_sorting_symlink_and_unreadable_directory(tmp_path:
     (repo / "a-root.txt").write_text("root\n", encoding="utf-8")
     (repo / "z-root.txt").write_text("root\n", encoding="utf-8")
     (repo / "link").symlink_to(adir, target_is_directory=True)
-    locked.chmod(0)
-    try:
-        result = _run(repo)
-    finally:
-        locked.chmod(0o700)
+    locked_metadata = locked.stat()
+    locked_identity = (locked_metadata.st_dev, locked_metadata.st_ino)
+    original_scandir = os.scandir
 
-    assert result.returncode == 0
-    tree = _section(result.stdout.decode("utf-8"), "Directory Tree", None)
+    def permission_denied_scandir(file_descriptor: int) -> os.ScandirIterator[str]:
+        metadata = os.fstat(file_descriptor)
+        if (metadata.st_dev, metadata.st_ino) == locked_identity:
+            raise PermissionError("synthetic unreadable directory")
+        return original_scandir(file_descriptor)
+
+    monkeypatch.setattr("context_loader.collect.os.scandir", permission_denied_scandir)
+    exit_code = main(["--repo", os.fspath(repo)])
+    captured = capsysbinary.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == b""
+    tree = _section(captured.out.decode("utf-8"), "Directory Tree", None)
     body = tree.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
     lines = body.splitlines()
     assert lines.index(".git/") < lines.index("adir/") < lines.index("bdir/")
