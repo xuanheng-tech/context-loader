@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 
 from .collect import (
     AGENTS_LIMIT_BYTES,
@@ -26,6 +27,12 @@ GLOBAL_OUTPUT_LIMIT_BYTES = 98_304
 MAX_CHANGE_ENTRIES = 100
 MAX_CHANGE_MARKDOWN_BYTES = 4 * 1024
 GLOBAL_OMISSION = "Omitted: global output limit reached."
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownRender:
+    output: bytes
+    included_sections: tuple[str, ...]
 
 
 def _display(value: str) -> str:
@@ -87,10 +94,18 @@ def _fenced(language: str, body: str) -> str:
     return f"{fence}{language}\n{body}{separator}{fence}"
 
 
-def _file_payload(source: CollectedFile, limit: int) -> str:
+def _file_body(source: CollectedFile, limit: int) -> str | None:
     if source.status is not None:
-        return source.status
+        return None
     body, _truncated = _content_with_marker(source.content, limit, source.truncated)
+    return body
+
+
+def _file_payload(source: CollectedFile, limit: int) -> str:
+    body = _file_body(source, limit)
+    if body is None:
+        assert source.status is not None
+        return source.status
     return _fenced(source.language, body)
 
 
@@ -185,9 +200,9 @@ def _render_commands(commands: tuple[DeclaredCommand, ...]) -> str:
     )
 
 
-def _entry_payload(source: CollectedFile, remaining: int) -> tuple[str, int]:
+def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int]:
     if source.status is not None:
-        return source.status, 0
+        return None, 0
     encoded_size = len(source.content.encode())
     aggregate_truncated = encoded_size > remaining
     needs_marker = source.truncated or aggregate_truncated
@@ -196,7 +211,15 @@ def _entry_payload(source: CollectedFile, remaining: int) -> tuple[str, int]:
     visible, was_cut = _truncate_at_line_boundary(source.content, max(0, content_limit))
     needs_marker = needs_marker or was_cut
     body = f"{visible}{TRUNCATION_MARKER}" if needs_marker else visible
-    return _fenced(source.language, body), len(visible.encode())
+    return body, len(visible.encode())
+
+
+def _entry_payload(source: CollectedFile, remaining: int) -> tuple[str, int]:
+    body, consumed = _entry_body(source, remaining)
+    if body is None:
+        assert source.status is not None
+        return source.status, consumed
+    return _fenced(source.language, body), consumed
 
 
 def _render_entry_files(entry_files: tuple[CollectedFile, ...]) -> str:
@@ -261,7 +284,7 @@ def _omitted_section(title: str) -> str:
     return f"## {title}\n\n{GLOBAL_OMISSION}"
 
 
-def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
+def render_markdown_with_details(state: RepositoryState, project: ProjectContext) -> MarkdownRender:
     """Render all sections in fixed order without exceeding the global byte limit."""
     header = "\n".join(
         (
@@ -292,6 +315,7 @@ def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
     ]
 
     rendered_parts = [header.encode()]
+    included_sections: list[str] = []
     omission_started = False
     for index, (title, full_section) in enumerate(sections):
         omission = _omitted_section(title).encode()
@@ -307,6 +331,7 @@ def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
             tentative = b"\n\n".join((*rendered_parts, candidate, *future_omissions)) + b"\n"
             if len(tentative) <= GLOBAL_OUTPUT_LIMIT_BYTES:
                 selected = candidate
+                included_sections.append(title)
             else:
                 selected = omission
                 omission_started = True
@@ -315,4 +340,34 @@ def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
     output = b"\n\n".join(rendered_parts) + b"\n"
     if len(output) > GLOBAL_OUTPUT_LIMIT_BYTES:
         raise RuntimeError("global context output limit could not be satisfied")
-    return output
+    return MarkdownRender(output=output, included_sections=tuple(included_sections))
+
+
+def rendered_source_contents(
+    project: ProjectContext, included_sections: tuple[str, ...]
+) -> tuple[tuple[CollectedFile, str], ...]:
+    """Return source-file bodies that actually appear in the final Markdown context."""
+    included = frozenset(included_sections)
+    rendered: list[tuple[CollectedFile, str]] = []
+    if "Development Instructions" in included:
+        body = _file_body(project.instructions, AGENTS_LIMIT_BYTES)
+        if body is not None:
+            rendered.append((project.instructions, body))
+    if "Project Overview" in included:
+        body = _file_body(project.overview, README_LIMIT_BYTES)
+        if body is not None:
+            rendered.append((project.overview, body))
+    if "Project Entry Files" in included:
+        used_content = 0
+        for source in project.entry_files:
+            remaining = max(0, ENTRY_FILES_TOTAL_LIMIT_BYTES - used_content)
+            body, consumed = _entry_body(source, remaining)
+            used_content += consumed
+            if body is not None:
+                rendered.append((source, body))
+    return tuple(rendered)
+
+
+def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
+    """Render all sections in fixed order without exceeding the global byte limit."""
+    return render_markdown_with_details(state, project).output

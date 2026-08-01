@@ -1,18 +1,19 @@
 # Codex Project Context Loader
 
-Codex Project Context Loader renders deterministic, bounded Markdown context for one local Git
-working tree. It reads repository state and a fixed set of root files without fetching, executing
-repository code, or writing to the target repository. Runtime code uses only the Python standard
-library.
+Codex Project Context Loader renders deterministic, bounded context for one local Git working tree.
+The default CLI output remains Markdown; a stable JSON interface is also available for machine
+callers. The tool reads repository state and a fixed set of root files without fetching, executing
+repository code, network access, or writes to the target repository. Runtime code uses only the
+Python standard library.
 
 ## Install
 
-Current release: `0.1.1`.
+Current release: `0.1.2`.
 
 Install a release wheel with `uv`:
 
 ```bash
-uv tool install /path/to/codex_project_context_loader-0.1.1-py3-none-any.whl
+uv tool install /path/to/codex_project_context_loader-0.1.2-py3-none-any.whl
 ```
 
 The repository also retains `./codex-project-context` as a direct development entry point.
@@ -22,12 +23,17 @@ The repository also retains `./codex-project-context` as a direct development en
 ```bash
 codex-project-context --version
 codex-project-context --repo /home/user/projects/example
+codex-project-context --repo /home/user/projects/example --format markdown
+codex-project-context --repo /home/user/projects/example --format json
 ```
 
-`--repo` must be the absolute, canonical root of a non-bare Git working tree. Relative paths, Git
-subdirectories, non-Git directories, and bare repositories are rejected.
+`--format` defaults to `markdown`. In Markdown mode, `--repo` retains the 0.1.1 contract: it must be
+the absolute, canonical root of a non-bare Git working tree. In JSON mode, an absolute existing
+directory inside the working tree is accepted; symlinks are normalized and the discovered root is
+reported as `canonical_root`. Relative paths, non-Git directories, regular files, and bare
+repositories are rejected in both modes.
 
-## Output
+## Markdown Output
 
 Successful repository collection uses schema `context-loader/v0.1` and emits these sections in
 order:
@@ -41,6 +47,49 @@ order:
 7. `Directory Tree`
 
 The output has no generated timestamp, AI summary, architecture inference, or diff body.
+
+## JSON Output
+
+`--format json` writes exactly one compact UTF-8 JSON document plus one trailing newline to stdout.
+Keys are serialized in sorted order with `ensure_ascii=False`. The declared contract is:
+
+```json
+{
+  "schema_version": 1,
+  "tool": {
+    "name": "context-loader",
+    "version": "0.1.2"
+  },
+  "repository": {
+    "requested_path": "/canonical/requested/path",
+    "canonical_root": "/canonical/worktree/root"
+  },
+  "sources": [
+    {
+      "ordinal": 0,
+      "kind": "agents",
+      "scope": "repository",
+      "path": "/canonical/worktree/root/AGENTS.md",
+      "content_sha256": "sha256-hex",
+      "content": "actual rendered source text"
+    }
+  ],
+  "context": "the same assembled Markdown context",
+  "context_sha256": "sha256-hex",
+  "warnings": []
+}
+```
+
+`context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
+source's `content`. `sources` contains only file bodies that actually enter the final context, in
+assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
+`repository` from `global`; version 0.1.2's fixed root-file selection currently emits only
+`repository` sources and does not add any global-file discovery.
+
+The JSON schema version and package version are independent: `schema_version` is currently the
+integer `1`, while `tool.version` is `0.1.2`. Callers must depend only on fields declared above. The
+document contains no generated time or random identifier, so unchanged input produces identical
+JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
 ## Supported Root Files
 
@@ -94,9 +143,9 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1.1 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
-ignore-rule parsing, plugins, profiles, caches, databases, network services, MCP, APIs, daemons,
-GUIs, CI/CD, telemetry, or automatic updates.
+Version 0.1.2 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+ignore-rule parsing, plugins, profiles, caches, databases, network services, MCP, daemons, GUIs,
+CI/CD, telemetry, or automatic updates.
 
 ## Development
 

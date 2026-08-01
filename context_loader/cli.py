@@ -7,9 +7,8 @@ import sys
 from collections.abc import Sequence
 
 from . import __version__
-from .collect import collect_project_context
-from .git import ContextLoaderError, collect_repository_state
-from .render import render_markdown
+from .application import load_project_context, render_json
+from .git import ContextLoaderError
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
@@ -21,19 +20,32 @@ class SafeArgumentParser(argparse.ArgumentParser):
 def _parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(
         prog="codex-project-context",
-        description="Render deterministic local Git context as Markdown.",
+        description="Render deterministic local Git context as Markdown or JSON.",
         allow_abbrev=False,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--repo", required=True, help="absolute Git worktree root")
+    parser.add_argument("--repo", required=True, help="absolute Git worktree path")
+    parser.add_argument(
+        "--format",
+        choices=("markdown", "json"),
+        default="markdown",
+        help="output format (default: markdown)",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         arguments = _parser().parse_args(argv)
-        state = collect_repository_state(arguments.repo)
-        output = render_markdown(state, collect_project_context(state.repository))
+        result = load_project_context(
+            arguments.repo,
+            require_repository_root=arguments.format == "markdown",
+        )
+        output = (
+            result.context.encode("utf-8")
+            if arguments.format == "markdown"
+            else render_json(result)
+        )
     except ContextLoaderError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code

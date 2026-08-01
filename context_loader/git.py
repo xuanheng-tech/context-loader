@@ -102,6 +102,12 @@ class RepositoryState:
         return "dirty" if self.changes else "clean"
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryLocation:
+    requested_path: Path
+    canonical_root: Path
+
+
 def _run_git(repo: Path, arguments: tuple[str, ...], *, check: bool = True) -> GitResult:
     argv = [GIT_EXECUTABLE, *_GIT_PREFIX, "-C", os.fspath(repo), *arguments]
     try:
@@ -137,8 +143,10 @@ def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="backslashreplace")
 
 
-def validate_repository(raw_path: str) -> Path:
-    """Return the canonical root of an explicit non-bare Git worktree."""
+def discover_repository(
+    raw_path: str | os.PathLike[str], *, require_canonical_root: bool = False
+) -> RepositoryLocation:
+    """Resolve an absolute directory and discover its non-bare Git worktree root."""
     candidate = Path(raw_path)
     if not candidate.is_absolute():
         raise ContextLoaderError("--repo must be an absolute path", exit_code=2)
@@ -169,11 +177,16 @@ def validate_repository(raw_path: str) -> Path:
         raise ContextLoaderError(
             "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
         ) from None
-    if discovered != canonical:
+    if require_canonical_root and discovered != canonical:
         raise ContextLoaderError(
             "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
         )
-    return canonical
+    return RepositoryLocation(requested_path=canonical, canonical_root=discovered)
+
+
+def validate_repository(raw_path: str | os.PathLike[str]) -> Path:
+    """Return the canonical root of an explicitly supplied Git worktree root."""
+    return discover_repository(raw_path, require_canonical_root=True).canonical_root
 
 
 def _head_and_branch(repo: Path) -> tuple[str, str, str | None]:
@@ -307,14 +320,17 @@ def _recent_commits(repo: Path, head: str) -> tuple[RecentCommit, ...]:
     return tuple(commits)
 
 
-def collect_repository_state(raw_path: str) -> RepositoryState:
-    """Validate one repository and collect only the Phase 01 Git fields."""
-    repository = validate_repository(raw_path)
+def collect_repository(
+    raw_path: str | os.PathLike[str], *, require_canonical_root: bool = True
+) -> tuple[RepositoryLocation, RepositoryState]:
+    """Discover one repository and collect only the Phase 01 Git fields."""
+    location = discover_repository(raw_path, require_canonical_root=require_canonical_root)
+    repository = location.canonical_root
     branch, head, branch_name = _head_and_branch(repository)
     upstream, ahead_behind = _upstream_state(repository, branch_name)
     changes = _working_tree_changes(repository)
     commits = _recent_commits(repository, head)
-    return RepositoryState(
+    state = RepositoryState(
         repository=repository,
         branch=branch,
         head=head,
@@ -323,3 +339,10 @@ def collect_repository_state(raw_path: str) -> RepositoryState:
         changes=changes,
         commits=commits,
     )
+    return location, state
+
+
+def collect_repository_state(raw_path: str | os.PathLike[str]) -> RepositoryState:
+    """Validate one repository root and collect only the Phase 01 Git fields."""
+    _location, state = collect_repository(raw_path)
+    return state
