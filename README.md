@@ -154,3 +154,11 @@ Run the complete local check:
 ```bash
 just check
 ```
+
+## Version maintenance
+
+The versions in `pyproject.toml` and `context_loader/__init__.py`, the matching `CHANGELOG.md`
+section, and required tests must change in the same release-preparation batch. `CHANGELOG.md` is the
+authoritative version-change record, and Gitea Release notes are generated from the matching
+section. Merging to `master` is not a release; formal publication still requires a separately
+created and pushed tag.

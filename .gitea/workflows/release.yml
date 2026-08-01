@@ -142,6 +142,14 @@ jobs:
           PY
           (cd dist && sha256sum --check SHA256SUMS.txt)
 
+      - name: Extract release notes from Changelog
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          uv run --frozen python scripts/changelog.py extract "$RELEASE_TAG" > release-notes.md
+          test -s release-notes.md
+
       - name: Create Gitea Release and upload verified assets
         env:
           GITEA_API_URL: ${{ github.api_url }}
@@ -169,6 +177,12 @@ jobs:
           token = required("GITEA_TOKEN")
           tag = required("RELEASE_TAG")
           commit = required("RELEASE_SHA")
+          notes_path = Path("release-notes.md")
+          if not notes_path.is_file():
+              raise SystemExit("release notes are missing")
+          notes = notes_path.read_text(encoding="utf-8").strip()
+          if not notes:
+              raise SystemExit("release notes are empty")
           release_url = f"{api_url}/repos/{urllib.parse.quote(repository, safe='/')}/releases"
 
           def request(method: str, url: str, data: bytes | None = None, content_type: str | None = None):
@@ -196,7 +210,7 @@ jobs:
                   "tag_name": tag,
                   "target_commitish": commit,
                   "name": tag,
-                  "body": "See CHANGELOG.md in this tag for verified changes.",
+                  "body": notes,
                   "draft": True,
                   "prerelease": False,
               },

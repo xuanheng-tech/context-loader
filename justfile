@@ -12,6 +12,6 @@ test:
     uv run --frozen pytest
 
 check:
-    uv run --frozen ruff check context_loader tests
-    uv run --frozen ruff format --check context_loader tests
+    uv run --frozen ruff check context_loader scripts tests
+    uv run --frozen ruff format --check context_loader scripts tests
     uv run --frozen pytest
