@@ -1,0 +1,236 @@
+name: release
+
+# Gitea evaluates workflows from the pushed tag's commit; this does not backfill older commits.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact tag commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact tag checkout
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_REF_TYPE" = "tag"
+          test "$RELEASE_REF" = "refs/tags/$RELEASE_REF_NAME"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$RELEASE_SHA"
+          test "$(git rev-parse "${RELEASE_REF}^{commit}")" = "$RELEASE_SHA"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.12.1"
+          enable-cache: false
+          github-token: ""
+
+      - name: Install Python
+        run: uv python install 3.12.13
+
+      - name: Install just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3.1.0
+        with:
+          just-version: "1.21.0"
+          github-token: ""
+
+      - name: Verify release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --frozen python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          tag = os.environ["RELEASE_TAG"]
+          if re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag) is None:
+              raise SystemExit(f"invalid release tag: {tag}")
+          project_version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          match = re.search(
+              r'^__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"$',
+              Path("context_loader/__init__.py").read_text(),
+              re.MULTILINE,
+          )
+          if match is None or match.group(1) != project_version:
+              raise SystemExit("package version declarations disagree")
+          if tag != f"v{project_version}":
+              raise SystemExit(f"tag {tag} does not match project version {project_version}")
+          print(f"release_version={project_version}")
+          PY
+
+      - name: Run project checks
+        run: just check
+
+      - name: Build wheel and source distribution
+        run: |
+          rm -rf dist
+          uv build --out-dir dist
+          rm -f dist/.gitignore
+
+      - name: Verify package artifacts and write checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --frozen python - <<'PY'
+          from email import policy
+          from email.parser import BytesParser
+          import hashlib
+          import os
+          from pathlib import Path
+          import re
+          import tarfile
+          import tomllib
+          import zipfile
+
+          root = Path("dist")
+          project = tomllib.loads(Path("pyproject.toml").read_text())["project"]
+          name = project["name"]
+          version = project["version"]
+          if os.environ["RELEASE_TAG"] != f"v{version}":
+              raise SystemExit("release tag changed after version verification")
+          archive_name = re.sub(r"[-_.]+", "_", name)
+          wheels = sorted(root.glob(f"{archive_name}-{version}-*.whl"))
+          sdist = root / f"{archive_name}-{version}.tar.gz"
+          if len(wheels) != 1 or not sdist.is_file():
+              raise SystemExit("expected exactly one versioned wheel and one source distribution")
+          artifacts = [wheels[0], sdist]
+          if sorted(path.name for path in root.iterdir()) != sorted(path.name for path in artifacts):
+              raise SystemExit("unexpected build artifact")
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              metadata_names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+              if len(metadata_names) != 1:
+                  raise SystemExit("wheel metadata is missing or ambiguous")
+              wheel_metadata = archive.read(metadata_names[0])
+          with tarfile.open(sdist, "r:gz") as archive:
+              metadata_members = [member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")]
+              if len(metadata_members) != 1 or not metadata_members[0].isfile():
+                  raise SystemExit("source distribution metadata is missing or ambiguous")
+              stream = archive.extractfile(metadata_members[0])
+              if stream is None:
+                  raise SystemExit("source distribution metadata is unreadable")
+              sdist_metadata = stream.read()
+
+          for label, raw in (("wheel", wheel_metadata), ("sdist", sdist_metadata)):
+              metadata = BytesParser(policy=policy.default).parsebytes(raw)
+              if metadata["Name"] != name or metadata["Version"] != version:
+                  raise SystemExit(f"{label} package identity does not match the release")
+
+          checksum_lines = []
+          for artifact in sorted(artifacts, key=lambda path: path.name):
+              checksum_lines.append(f"{hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}\n")
+          (root / "SHA256SUMS.txt").write_text("".join(checksum_lines), encoding="utf-8")
+          PY
+          (cd dist && sha256sum --check SHA256SUMS.txt)
+
+      - name: Create Gitea Release and upload verified assets
+        env:
+          GITEA_API_URL: ${{ github.api_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          def required(name: str) -> str:
+              value = os.environ.get(name, "")
+              if not value:
+                  raise SystemExit(f"required Actions value is missing: {name}")
+              return value
+
+          api_url = required("GITEA_API_URL").rstrip("/")
+          repository = required("GITEA_REPOSITORY")
+          token = required("GITEA_TOKEN")
+          tag = required("RELEASE_TAG")
+          commit = required("RELEASE_SHA")
+          release_url = f"{api_url}/repos/{urllib.parse.quote(repository, safe='/')}/releases"
+
+          def request(method: str, url: str, data: bytes | None = None, content_type: str | None = None):
+              headers = {"Accept": "application/json", "Authorization": f"token {token}"}
+              if content_type is not None:
+                  headers["Content-Type"] = content_type
+              operation = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(operation, timeout=30) as response:
+                      return response.status, response.read()
+              except urllib.error.HTTPError as exc:
+                  return exc.code, exc.read(4096)
+              except urllib.error.URLError as exc:
+                  raise SystemExit(f"Gitea API request failed: {exc.reason}") from exc
+
+          tag_url = f"{release_url}/tags/{urllib.parse.quote(tag, safe='')}"
+          status, _ = request("GET", tag_url)
+          if status == 200:
+              raise SystemExit(f"release {tag} already exists; refusing to overwrite it")
+          if status != 404:
+              raise SystemExit(f"unable to verify existing release state: HTTP {status}")
+
+          payload = json.dumps(
+              {
+                  "tag_name": tag,
+                  "target_commitish": commit,
+                  "name": tag,
+                  "body": "See CHANGELOG.md in this tag for verified changes.",
+                  "draft": True,
+                  "prerelease": False,
+              },
+              separators=(",", ":"),
+          ).encode()
+          status, body = request("POST", release_url, payload, "application/json")
+          if status != 201:
+              raise SystemExit(f"unable to create draft release: HTTP {status}")
+          try:
+              release_id = int(json.loads(body)["id"])
+          except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("Gitea returned an invalid release response") from exc
+
+          assets = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          if not assets:
+              raise SystemExit("no release assets were produced")
+          for asset in assets:
+              upload_url = (
+                  f"{release_url}/{release_id}/assets?"
+                  + urllib.parse.urlencode({"name": asset.name})
+              )
+              status, _ = request("POST", upload_url, asset.read_bytes(), "application/octet-stream")
+              if status != 201:
+                  raise SystemExit(
+                      f"asset upload failed for {asset.name}: HTTP {status}; draft release retained"
+                  )
+
+          status, _ = request(
+              "PATCH",
+              f"{release_url}/{release_id}",
+              b'{"draft":false}',
+              "application/json",
+          )
+          if status != 200:
+              raise SystemExit(f"unable to publish draft release: HTTP {status}")
+          print(f"published_release={tag} assets={len(assets)}")
+          PY
