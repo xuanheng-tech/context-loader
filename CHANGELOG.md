@@ -6,6 +6,10 @@ dates.
 
 ## Unreleased
 
+- Added: Optional bounded `focus` and repository-relative `path` signals plus a deterministic
+  per-source AGENTS selection audit in Markdown and JSON output.
+- Changed: Root `AGENTS.md` loading now combines a 4-KiB head, relevant complete Markdown sections,
+  parent context, and an indexed-only heading fallback without increasing the 16-KiB output budget.
 - Added: A tag-only Gitea Actions workflow with exact checkout, version and package verification,
   wheel and sdist builds, SHA-256 checksums, and refusal to overwrite an existing Release.
 - Changed: Changelog validation now requires one non-empty section for the source version, and

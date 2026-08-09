@@ -9,8 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
-from .collect import ProjectContext, collect_project_context
-from .git import collect_repository
+from .collect import (
+    AgentsSectionAuditEntry,
+    AgentsSelectionAudit,
+    AgentsSelectionInputError,
+    ProjectContext,
+    collect_project_context,
+)
+from .git import ContextLoaderError, collect_repository
 from .render import render_markdown_with_details, rendered_source_contents
 
 JSON_SCHEMA_VERSION = 1
@@ -37,6 +43,7 @@ class ProjectContextSource:
     path: Path
     content_sha256: str
     content: str
+    selection: AgentsSelectionAudit | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,20 +96,28 @@ def _sources(
                 path=path,
                 content_sha256=_text_sha256(content),
                 content=content,
+                selection=source.selection,
             )
         )
     return tuple(sources)
 
 
 def load_project_context(
-    repo: str | os.PathLike[str], *, require_repository_root: bool = False
+    repo: str | os.PathLike[str],
+    *,
+    require_repository_root: bool = False,
+    focus: str | None = None,
+    path: str | None = None,
 ) -> ProjectContextResult:
     """Collect one repository once and return its deterministic machine-readable result."""
     location, state = collect_repository(
         repo,
         require_canonical_root=require_repository_root,
     )
-    project = collect_project_context(state.repository)
+    try:
+        project = collect_project_context(state.repository, focus=focus, path=path)
+    except AgentsSelectionInputError as exc:
+        raise ContextLoaderError(str(exc), exit_code=2) from None
     rendered = render_markdown_with_details(state, project)
     context = rendered.output.decode("utf-8")
     return ProjectContextResult(
@@ -119,6 +134,43 @@ def load_project_context(
     )
 
 
+def _selection_document(selection: AgentsSelectionAudit) -> dict[str, object]:
+    def entry_document(entry: AgentsSectionAuditEntry) -> dict[str, object]:
+        return {
+            "heading": entry.heading,
+            "heading_level": entry.heading_level,
+            "reasons": list(entry.reasons),
+        }
+
+    return {
+        "source": selection.source,
+        "selected_sections": [entry_document(entry) for entry in selection.selected_sections],
+        "indexed_only_sections": [
+            entry_document(entry) for entry in selection.indexed_only_sections
+        ],
+        "chars_selected": selection.chars_selected,
+        "chars_omitted": selection.chars_omitted,
+        "truncated": selection.truncated,
+        "parse_fallback": selection.parse_fallback,
+        "source_scan_truncated": selection.source_scan_truncated,
+        "index_truncated": selection.index_truncated,
+    }
+
+
+def _source_document(source: ProjectContextSource) -> dict[str, object]:
+    document: dict[str, object] = {
+        "ordinal": source.ordinal,
+        "kind": source.kind,
+        "scope": source.scope,
+        "path": os.fspath(source.path),
+        "content_sha256": source.content_sha256,
+        "content": source.content,
+    }
+    if source.selection is not None:
+        document["selection"] = _selection_document(source.selection)
+    return document
+
+
 def render_json(result: ProjectContextResult) -> bytes:
     """Serialize one result as stable UTF-8 JSON followed by exactly one newline."""
     document = {
@@ -131,17 +183,7 @@ def render_json(result: ProjectContextResult) -> bytes:
             "requested_path": os.fspath(result.repository.requested_path),
             "canonical_root": os.fspath(result.repository.canonical_root),
         },
-        "sources": [
-            {
-                "ordinal": source.ordinal,
-                "kind": source.kind,
-                "scope": source.scope,
-                "path": os.fspath(source.path),
-                "content_sha256": source.content_sha256,
-                "content": source.content,
-            }
-            for source in result.sources
-        ],
+        "sources": [_source_document(source) for source in result.sources],
         "context": result.context,
         "context_sha256": result.context_sha256,
         "warnings": list(result.warnings),

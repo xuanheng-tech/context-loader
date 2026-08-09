@@ -70,9 +70,20 @@ def _repository(tmp_path: Path, *, commit: bool = True) -> Path:
     return repo
 
 
-def _run(repo: str | Path, *, cwd: Path | str = "/") -> subprocess.CompletedProcess[bytes]:
+def _run(
+    repo: str | Path,
+    *,
+    cwd: Path | str = "/",
+    focus: str | None = None,
+    path: str | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    argv = [os.fspath(CLI), "--repo", os.fspath(repo)]
+    if focus is not None:
+        argv.extend(("--focus", focus))
+    if path is not None:
+        argv.extend(("--path", path))
     return subprocess.run(
-        [os.fspath(CLI), "--repo", os.fspath(repo)],
+        argv,
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -181,6 +192,48 @@ def test_repeated_output_is_byte_identical(tmp_path: Path) -> None:
     assert first.returncode == second.returncode == 0
     assert first.stdout == second.stdout
     assert first.stderr == second.stderr == b""
+
+
+def test_optional_focus_and_path_select_late_agents_section_without_breaking_legacy_call(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text(
+        "# Demo\n\n## Core\ncore\n\n"
+        "## Unrelated Commands\n"
+        + ("build lint command\n" * 500)
+        + "\n## JoinQuant Provider Runtime\nLATE_RUNTIME_GATE\n",
+        encoding="utf-8",
+    )
+
+    legacy = _run(repo)
+    focused = _run(
+        repo,
+        focus="JoinQuant provider runtime",
+        path="scripts/joinquant/provider_probe.py",
+    )
+
+    assert legacy.returncode == focused.returncode == 0
+    assert "LATE_RUNTIME_GATE" not in legacy.stdout.decode("utf-8")
+    assert "H2 JoinQuant Provider Runtime" in legacy.stdout.decode("utf-8")
+    assert "LATE_RUNTIME_GATE" in focused.stdout.decode("utf-8")
+    assert "focus_match" in focused.stdout.decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("focus", "path"),
+    [("x" * 1_025, None), (None, "/absolute/target.py"), (None, "../outside.py")],
+)
+def test_selection_inputs_are_bounded_and_repository_relative(
+    tmp_path: Path, focus: str | None, path: str | None
+) -> None:
+    repo = _repository(tmp_path)
+
+    result = _run(repo, focus=focus, path=path)
+
+    assert result.returncode == 2
+    assert result.stdout == b""
+    assert result.stderr.startswith(b"error: ")
 
 
 @pytest.mark.parametrize("kind", ["relative", "subdirectory", "non_git", "bare"])
@@ -643,8 +696,13 @@ def test_single_file_truncation_is_utf8_and_line_safe(tmp_path: Path) -> None:
     instructions = _section(output, "Development Instructions", "Project Overview")
     body = instructions.split("```markdown\n", 1)[1].rsplit("\n```", 1)[0]
     assert "END MUST NOT APPEAR" not in output
-    assert body.endswith("… truncated by context-loader …")
-    assert len(body.encode()) <= 16 * 1024
+    assert len(body.encode()) <= 4 * 1024
+    assert "- Selection truncated: `true`" in instructions
+    assert "Omitted content has no available heading index" in instructions
+    assert (
+        len(body.encode()) + len(instructions.split("### AGENTS Selection Audit\n", 1)[1].encode())
+        <= 16 * 1024
+    )
 
 
 def test_entry_file_content_has_per_file_and_aggregate_limits(tmp_path: Path) -> None:

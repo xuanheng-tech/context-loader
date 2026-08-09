@@ -26,6 +26,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--repo", required=True, help="absolute Git worktree path")
     parser.add_argument(
+        "--focus",
+        help="optional bounded task focus used for deterministic AGENTS section selection",
+    )
+    parser.add_argument(
+        "--path",
+        dest="target_path",
+        help="optional repository-relative target path used for AGENTS section selection",
+    )
+    parser.add_argument(
         "--format",
         choices=("markdown", "json"),
         default="markdown",
@@ -40,6 +49,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = load_project_context(
             arguments.repo,
             require_repository_root=arguments.format == "markdown",
+            focus=arguments.focus,
+            path=arguments.target_path,
         )
         output = (
             result.context.encode("utf-8")

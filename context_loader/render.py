@@ -19,6 +19,7 @@ from .collect import (
     DirectoryTree,
     ProjectContext,
     TreeEntry,
+    render_agents_selection_audit,
 )
 from .git import RecentCommit, RepositoryState
 
@@ -97,6 +98,8 @@ def _fenced(language: str, body: str) -> str:
 def _file_body(source: CollectedFile, limit: int) -> str | None:
     if source.status is not None:
         return None
+    if source.selection is not None:
+        return source.content
     body, _truncated = _content_with_marker(source.content, limit, source.truncated)
     return body
 
@@ -148,15 +151,16 @@ def _render_git_state(state: RepositoryState) -> str:
 
 
 def _render_source_section(title: str, source: CollectedFile, limit: int) -> str:
-    return "\n".join(
-        (
-            f"## {title}",
-            "",
-            f"Source: `{source.name}`",
-            "",
-            _file_payload(source, limit),
-        )
-    )
+    parts = [
+        f"## {title}",
+        "",
+        f"Source: `{source.name}`",
+        "",
+        _file_payload(source, limit),
+    ]
+    if source.selection is not None:
+        parts.extend(("", render_agents_selection_audit(source.selection)))
+    return "\n".join(parts)
 
 
 def _command_line(command: DeclaredCommand) -> str:

@@ -25,6 +25,9 @@ codex-project-context --version
 codex-project-context --repo /home/user/projects/example
 codex-project-context --repo /home/user/projects/example --format markdown
 codex-project-context --repo /home/user/projects/example --format json
+codex-project-context --repo /home/user/projects/example \
+  --focus "JoinQuant provider notebook runtime" \
+  --path scripts/joinquant/provider_probe.py
 ```
 
 `--format` defaults to `markdown`. In Markdown mode, `--repo` retains the 0.1.1 contract: it must be
@@ -32,6 +35,10 @@ the absolute, canonical root of a non-bare Git working tree. In JSON mode, an ab
 directory inside the working tree is accepted; symlinks are normalized and the discovered root is
 reported as `canonical_root`. Relative paths, non-Git directories, regular files, and bare
 repositories are rejected in both modes.
+
+`--focus` and `--path` are optional, bounded selection signals for the root `AGENTS.md`. `--path`
+must be repository-relative. The collector does not retain either input in output or audit data.
+Calls that omit both options remain valid and use the conservative fallback described below.
 
 ## Markdown Output
 
@@ -71,7 +78,18 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
       "scope": "repository",
       "path": "/canonical/worktree/root/AGENTS.md",
       "content_sha256": "sha256-hex",
-      "content": "actual rendered source text"
+      "content": "actual selected source text",
+      "selection": {
+        "source": "AGENTS.md",
+        "selected_sections": [],
+        "indexed_only_sections": [],
+        "chars_selected": 0,
+        "chars_omitted": 0,
+        "truncated": false,
+        "parse_fallback": false,
+        "source_scan_truncated": false,
+        "index_truncated": false
+      }
     }
   ],
   "context": "the same assembled Markdown context",
@@ -85,6 +103,10 @@ source's `content`. `sources` contains only file bodies that actually enter the 
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
 `repository` from `global`; version 0.1.2's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
+
+The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
+contain heading, heading level, and fixed selection reasons; it never contains the original focus or
+target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
 integer `1`, while `tool.version` is `0.1.2`. Callers must depend only on fields declared above. The
@@ -103,10 +125,18 @@ Only these exact files directly under the Git root are eligible:
 Lowercase `justfile` takes precedence over `Justfile`. Nested files, lockfiles, CI configuration,
 `.env`, and glob-discovered files are not read.
 
+The root `AGENTS.md` is split at Markdown headings outside fenced code blocks. The output always
+starts with complete early sections fitting a 4-KiB head, then adds complete relevant sections in
+source order using exact normalized focus/path tokens and their parent context. Remaining headings
+appear in an explicit index whose body text is not loaded. With no selection signals, only the small
+head and index are emitted. Unsafe heading parsing falls back to a bounded head and an explicit
+manual-recovery notice.
+
 ## Limits
 
 - Final stdout: 98,304 bytes
-- `AGENTS.md`: 16 KiB
+- `AGENTS.md`: 256-KiB bounded source scan; selected source plus selection audit remains at most
+  16 KiB, including a 4-KiB maximum small head
 - `README.md`: 16 KiB
 - Each entry file: 8 KiB
 - All entry-file bodies: 24 KiB
@@ -144,8 +174,8 @@ or candidate-file content.
 ## Not Included
 
 Version 0.1.2 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
-ignore-rule parsing, plugins, profiles, caches, databases, network services, MCP, daemons, GUIs,
-CI/CD, telemetry, or automatic updates.
+Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
+network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 
 ## Development
 

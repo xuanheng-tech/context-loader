@@ -70,10 +70,16 @@ def _run(
     *,
     output_format: str | None = None,
     extra_env: dict[str, str] | None = None,
+    focus: str | None = None,
+    path: str | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     argv = [os.fspath(CLI), "--repo", os.fspath(repo)]
     if output_format is not None:
         argv.extend(("--format", output_format))
+    if focus is not None:
+        argv.extend(("--focus", focus))
+    if path is not None:
+        argv.extend(("--path", path))
     environment = dict(CONTROLLED_ENV)
     if extra_env is not None:
         environment.update(extra_env)
@@ -146,6 +152,21 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
         "pyproject.toml",
     ]
     assert {source["scope"] for source in document["sources"]} == {"repository"}
+    selection = document["sources"][0]["selection"]
+    assert selection == {
+        "source": "AGENTS.md",
+        "selected_sections": [
+            {"heading": "Document head", "heading_level": 0, "reasons": ["head"]}
+        ],
+        "indexed_only_sections": [],
+        "chars_selected": len("AGENT SOURCE UNIQUE\n"),
+        "chars_omitted": 0,
+        "truncated": False,
+        "parse_fallback": False,
+        "source_scan_truncated": False,
+        "index_truncated": False,
+    }
+    assert all("selection" not in source for source in document["sources"][1:])
 
     context = document["context"]
     search_offset = 0
@@ -165,6 +186,31 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
         separators=(",", ":"),
     ).encode()
     assert result.stdout == canonical_json + b"\n"
+
+
+def test_json_selection_audit_does_not_persist_focus_or_target_path(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Demo\n\n## Core\ncore\n", encoding="utf-8")
+    focus = "unused-sensitive-shaped-focus-phrase"
+    path = "private-shaped/component.py"
+
+    result = _run(repo, output_format="json", focus=focus, path=path)
+
+    assert result.returncode == 0
+    assert focus.encode() not in result.stdout
+    assert path.encode() not in result.stdout
+    selection = json.loads(result.stdout)["sources"][0]["selection"]
+    assert set(selection) == {
+        "source",
+        "selected_sections",
+        "indexed_only_sections",
+        "chars_selected",
+        "chars_omitted",
+        "truncated",
+        "parse_fallback",
+        "source_scan_truncated",
+        "index_truncated",
+    }
 
 
 def test_markdown_default_and_explicit_format_are_byte_identical(tmp_path: Path) -> None:

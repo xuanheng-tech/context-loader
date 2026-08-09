@@ -9,10 +9,15 @@ import os
 import re
 import stat
 import tomllib
-from dataclasses import dataclass
-from pathlib import Path
+import unicodedata
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 
 AGENTS_LIMIT_BYTES = 16 * 1024
+AGENTS_HEAD_LIMIT_BYTES = 4 * 1024
+AGENTS_SCAN_LIMIT_BYTES = 256 * 1024
+AGENTS_FOCUS_LIMIT_BYTES = 1024
+AGENTS_PATH_LIMIT_BYTES = 1024
 README_LIMIT_BYTES = 16 * 1024
 ENTRY_FILE_LIMIT_BYTES = 8 * 1024
 ENTRY_FILES_TOTAL_LIMIT_BYTES = 24 * 1024
@@ -47,6 +52,104 @@ _MAKE_TARGET_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]*"
     r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.-]*)*)[ \t]*:(?![:=])"
 )
+_ATX_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$")
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_MATCH_TOKEN_STOPWORDS = frozenset(
+    {
+        "and",
+        "code",
+        "docs",
+        "file",
+        "files",
+        "for",
+        "from",
+        "into",
+        "must",
+        "path",
+        "project",
+        "section",
+        "should",
+        "source",
+        "task",
+        "test",
+        "tests",
+        "that",
+        "the",
+        "this",
+        "when",
+        "where",
+        "with",
+        "work",
+    }
+)
+_PATH_TOKEN_STOPWORDS = _MATCH_TOKEN_STOPWORDS | {
+    "app",
+    "apps",
+    "application",
+    "backend",
+    "bin",
+    "data",
+    "doc",
+    "frontend",
+    "ingestion",
+    "lib",
+    "package",
+    "packages",
+    "platform",
+    "provider",
+    "providers",
+    "py",
+    "python",
+    "quant",
+    "scripts",
+    "src",
+}
+_SELECTION_REASON_ORDER = (
+    "head",
+    "focus_match",
+    "path_match",
+    "parent_context",
+    "budget_fallback",
+)
+
+
+class AgentsSelectionInputError(ValueError):
+    """Raised when optional AGENTS selection inputs exceed the bounded contract."""
+
+
+class MarkdownSectionParseError(ValueError):
+    """Raised when Markdown headings cannot be parsed safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownSection:
+    heading: str
+    heading_level: int
+    start: int
+    end: int
+    text: str
+    normalized_heading: str
+    parent_index: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class AgentsSectionAuditEntry:
+    heading: str
+    heading_level: int
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentsSelectionAudit:
+    source: str
+    selected_sections: tuple[AgentsSectionAuditEntry, ...]
+    indexed_only_sections: tuple[AgentsSectionAuditEntry, ...]
+    chars_selected: int
+    chars_omitted: int
+    truncated: bool
+    parse_fallback: bool = False
+    source_scan_truncated: bool = False
+    index_truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +159,7 @@ class CollectedFile:
     status: str | None
     content: str = ""
     truncated: bool = False
+    selection: AgentsSelectionAudit | None = None
 
     @property
     def is_text(self) -> bool:
@@ -89,6 +193,408 @@ class ProjectContext:
     entry_files: tuple[CollectedFile, ...]
     commands: tuple[DeclaredCommand, ...]
     directory_tree: DirectoryTree
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionSignals:
+    focus_tokens: frozenset[str]
+    path_tokens: frozenset[str]
+    normalized_path: str | None
+
+
+def _normalized_text(value: str) -> str:
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _matching_tokens(value: str, stopwords: frozenset[str]) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in _TOKEN_RE.findall(_normalized_text(value))
+        if len(token) >= 3 and token not in stopwords
+    )
+
+
+def _bounded_optional_input(name: str, value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise AgentsSelectionInputError(f"{name} must be a string")
+    bounded = value.strip()
+    if not bounded:
+        return None
+    if len(bounded.encode("utf-8")) > limit:
+        raise AgentsSelectionInputError(f"{name} exceeds {limit} bytes")
+    if any(ord(character) < 32 or ord(character) == 127 for character in bounded):
+        raise AgentsSelectionInputError(f"{name} contains control characters")
+    return bounded
+
+
+def _selection_signals(focus: str | None, path: str | None) -> _SelectionSignals:
+    bounded_focus = _bounded_optional_input("focus", focus, AGENTS_FOCUS_LIMIT_BYTES)
+    bounded_path = _bounded_optional_input("path", path, AGENTS_PATH_LIMIT_BYTES)
+    normalized_path: str | None = None
+    path_tokens: frozenset[str] = frozenset()
+    if bounded_path is not None:
+        candidate = PurePosixPath(bounded_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise AgentsSelectionInputError("path must be repository-relative without '..'")
+        normalized_path = candidate.as_posix()
+        if normalized_path == ".":
+            normalized_path = None
+        path_tokens = _matching_tokens(normalized_path or "", _PATH_TOKEN_STOPWORDS)
+    return _SelectionSignals(
+        focus_tokens=_matching_tokens(bounded_focus or "", _MATCH_TOKEN_STOPWORDS),
+        path_tokens=path_tokens,
+        normalized_path=normalized_path,
+    )
+
+
+def _ordered_reasons(reasons: set[str] | frozenset[str]) -> tuple[str, ...]:
+    return tuple(reason for reason in _SELECTION_REASON_ORDER if reason in reasons)
+
+
+def _audit_heading(heading: str) -> str:
+    safe = heading.replace("`", r"\x60").strip()
+    if len(safe) <= 160:
+        return safe
+    return f"{safe[:159]}…"
+
+
+def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
+    """Render the bounded, prompt-free AGENTS selection audit and fail-safe index."""
+    lines = [
+        "### AGENTS Selection Audit",
+        "",
+        f"- Source: `{audit.source}`",
+        f"- Selected source characters: `{audit.chars_selected}`",
+        f"- Omitted source characters: `{audit.chars_omitted}`",
+        f"- Selection truncated: `{'true' if audit.truncated else 'false'}`",
+        "",
+        "Selected AGENTS sections (rule text loaded):",
+    ]
+    if audit.selected_sections:
+        for entry in audit.selected_sections:
+            label = "Document head" if entry.heading_level == 0 else _audit_heading(entry.heading)
+            reasons = ", ".join(entry.reasons)
+            lines.append(f"- {label} — `{reasons}`")
+    else:
+        lines.append("- None.")
+    lines.extend(
+        (
+            "",
+            "Additional AGENTS sections not loaded (index only; rule text not loaded):",
+        )
+    )
+    if audit.indexed_only_sections:
+        for entry in audit.indexed_only_sections:
+            lines.append(f"- H{entry.heading_level} {_audit_heading(entry.heading)}")
+    else:
+        lines.append("- None.")
+        if audit.truncated and not audit.index_truncated:
+            lines.append("- Omitted content has no available heading index; read the source path.")
+    if audit.index_truncated:
+        lines.append("- Additional headings omitted from this index by the AGENTS budget.")
+    if audit.parse_fallback:
+        lines.append("- Heading parsing was unsafe; use the source path for manual recovery.")
+    if audit.source_scan_truncated:
+        lines.append("- The bounded source scan ended before EOF; later headings may be absent.")
+    return "\n".join(lines)
+
+
+def _fence_marker(line: str) -> tuple[str, int, str] | None:
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > 3 or not stripped or stripped[0] not in {"`", "~"}:
+        return None
+    character = stripped[0]
+    length = len(stripped) - len(stripped.lstrip(character))
+    if length < 3:
+        return None
+    return character, length, stripped[length:]
+
+
+def _parse_markdown_sections(content: str) -> tuple[MarkdownSection, ...]:
+    headings: list[tuple[str, int, int]] = []
+    offset = 0
+    open_fence: tuple[str, int] | None = None
+    for line in content.splitlines(keepends=True):
+        visible = line.removesuffix("\n")
+        marker = _fence_marker(visible)
+        if open_fence is not None:
+            if marker is not None:
+                character, length, remainder = marker
+                if character == open_fence[0] and length >= open_fence[1] and not remainder.strip():
+                    open_fence = None
+            offset += len(line)
+            continue
+        if marker is not None:
+            character, length, _remainder = marker
+            open_fence = (character, length)
+            offset += len(line)
+            continue
+        match = _ATX_HEADING_RE.fullmatch(visible)
+        if match is not None:
+            heading = (match.group(2) or "").rstrip()
+            heading = re.sub(r"[ \t]+#+[ \t]*$", "", heading).strip()
+            headings.append((heading, len(match.group(1)), offset))
+        offset += len(line)
+    if open_fence is not None:
+        raise MarkdownSectionParseError("unclosed fenced code block")
+
+    sections: list[MarkdownSection] = []
+    parents: list[int] = []
+    for index, (heading, level, start) in enumerate(headings):
+        while parents and sections[parents[-1]].heading_level >= level:
+            parents.pop()
+        parent_index = parents[-1] if parents else None
+        end = headings[index + 1][2] if index + 1 < len(headings) else len(content)
+        sections.append(
+            MarkdownSection(
+                heading=heading,
+                heading_level=level,
+                start=start,
+                end=end,
+                text=content[start:end],
+                normalized_heading=" ".join(_TOKEN_RE.findall(_normalized_text(heading))),
+                parent_index=parent_index,
+            )
+        )
+        parents.append(index)
+    return tuple(sections)
+
+
+def _line_safe_prefix_end(content: str, limit: int) -> int:
+    encoded = content.encode("utf-8")
+    if len(encoded) <= limit:
+        return len(content)
+    boundary = encoded.rfind(b"\n", 0, limit + 1)
+    if boundary < 0:
+        return 0
+    return len(encoded[: boundary + 1].decode("utf-8"))
+
+
+def _small_head_end(content: str, sections: tuple[MarkdownSection, ...]) -> int:
+    if len(content.encode("utf-8")) <= AGENTS_HEAD_LIMIT_BYTES:
+        return len(content)
+    document_head_end = sections[0].start if sections else len(content)
+    if len(content[:document_head_end].encode("utf-8")) > AGENTS_HEAD_LIMIT_BYTES:
+        return _line_safe_prefix_end(content[:document_head_end], AGENTS_HEAD_LIMIT_BYTES)
+    boundary = document_head_end
+    for section in sections:
+        if len(content[: section.end].encode("utf-8")) > AGENTS_HEAD_LIMIT_BYTES:
+            break
+        boundary = section.end
+    if boundary == 0:
+        return _line_safe_prefix_end(content, AGENTS_HEAD_LIMIT_BYTES)
+    return boundary
+
+
+def _section_relevance(
+    section: MarkdownSection, signals: _SelectionSignals
+) -> tuple[int, frozenset[str]]:
+    heading_tokens = _matching_tokens(section.heading, _MATCH_TOKEN_STOPWORDS)
+    section_tokens = _matching_tokens(section.text, _MATCH_TOKEN_STOPWORDS)
+    body_tokens = section_tokens - heading_tokens
+    score = 0
+    reasons: set[str] = set()
+
+    focus_heading = signals.focus_tokens & heading_tokens
+    focus_body = signals.focus_tokens & body_tokens
+    if focus_heading or focus_body:
+        reasons.add("focus_match")
+        score += 6 * len(focus_heading) + len(focus_body)
+
+    path_heading = signals.path_tokens & heading_tokens
+    path_body = signals.path_tokens & body_tokens
+    normalized_section = _normalized_text(section.text)
+    exact_path = bool(
+        signals.normalized_path and _normalized_text(signals.normalized_path) in normalized_section
+    )
+    if exact_path or path_heading or path_body:
+        reasons.add("path_match")
+        score += (10 if exact_path else 0) + 5 * len(path_heading) + 2 * len(path_body)
+    return score, frozenset(reasons)
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if start >= end:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def _interval_is_covered(start: int, end: int, intervals: tuple[tuple[int, int], ...]) -> bool:
+    return any(
+        selected_start <= start and end <= selected_end
+        for selected_start, selected_end in intervals
+    )
+
+
+def _selection_state(
+    content: str,
+    sections: tuple[MarkdownSection, ...],
+    head_end: int,
+    selected_indices: frozenset[int],
+    reasons: dict[int, set[str]],
+    budget_fallback: frozenset[int],
+    *,
+    parse_fallback: bool,
+    source_scan_truncated: bool,
+) -> tuple[str, AgentsSelectionAudit]:
+    intervals = [(0, head_end)] if head_end else []
+    intervals.extend((sections[index].start, sections[index].end) for index in selected_indices)
+    merged = _merge_intervals(intervals)
+    selected_content = "".join(content[start:end] for start, end in merged)
+
+    selected_entries: list[AgentsSectionAuditEntry] = []
+    document_head_end = sections[0].start if sections else len(content)
+    if document_head_end and _interval_is_covered(0, min(document_head_end, head_end), merged):
+        selected_entries.append(AgentsSectionAuditEntry("Document head", 0, ("head",)))
+    indexed_entries: list[AgentsSectionAuditEntry] = []
+    for index, section in enumerate(sections):
+        if _interval_is_covered(section.start, section.end, merged):
+            entry_reasons = set(reasons.get(index, set()))
+            if section.end <= head_end:
+                entry_reasons.add("head")
+            selected_entries.append(
+                AgentsSectionAuditEntry(
+                    section.heading,
+                    section.heading_level,
+                    _ordered_reasons(entry_reasons),
+                )
+            )
+        else:
+            indexed_entries.append(
+                AgentsSectionAuditEntry(
+                    section.heading,
+                    section.heading_level,
+                    ("budget_fallback",) if index in budget_fallback else (),
+                )
+            )
+
+    chars_selected = sum(end - start for start, end in merged)
+    chars_omitted = max(0, len(content) - chars_selected)
+    audit = AgentsSelectionAudit(
+        source="AGENTS.md",
+        selected_sections=tuple(selected_entries),
+        indexed_only_sections=tuple(indexed_entries),
+        chars_selected=chars_selected,
+        chars_omitted=chars_omitted,
+        truncated=chars_omitted > 0 or source_scan_truncated,
+        parse_fallback=parse_fallback,
+        source_scan_truncated=source_scan_truncated,
+    )
+    return selected_content, audit
+
+
+def _aggregate_agents_bytes(content: str, audit: AgentsSelectionAudit) -> int:
+    return len(content.encode("utf-8")) + len(render_agents_selection_audit(audit).encode("utf-8"))
+
+
+def _fit_agents_index(content: str, audit: AgentsSelectionAudit) -> AgentsSelectionAudit:
+    if _aggregate_agents_bytes(content, audit) <= AGENTS_LIMIT_BYTES:
+        return audit
+    indexed = list(audit.indexed_only_sections)
+    while indexed:
+        indexed.pop()
+        candidate = replace(audit, indexed_only_sections=tuple(indexed), index_truncated=True)
+        if _aggregate_agents_bytes(content, candidate) <= AGENTS_LIMIT_BYTES:
+            return candidate
+    candidate = replace(audit, indexed_only_sections=(), index_truncated=True)
+    if _aggregate_agents_bytes(content, candidate) > AGENTS_LIMIT_BYTES:
+        raise RuntimeError("AGENTS head and selection audit exceed the AGENTS budget")
+    return candidate
+
+
+def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) -> CollectedFile:
+    if not source.is_text:
+        return source
+    try:
+        sections = _parse_markdown_sections(source.content)
+    except MarkdownSectionParseError:
+        head_end = _line_safe_prefix_end(source.content, AGENTS_HEAD_LIMIT_BYTES)
+        content, audit = _selection_state(
+            source.content,
+            (),
+            head_end,
+            frozenset(),
+            {},
+            frozenset(),
+            parse_fallback=True,
+            source_scan_truncated=source.truncated,
+        )
+        audit = _fit_agents_index(content, audit)
+        return CollectedFile(
+            source.name,
+            source.language,
+            None,
+            content,
+            audit.truncated,
+            audit,
+        )
+
+    head_end = _small_head_end(source.content, sections)
+    selected_indices: frozenset[int] = frozenset()
+    reasons: dict[int, set[str]] = {}
+    ranked: list[tuple[int, int, frozenset[str]]] = []
+    for index, section in enumerate(sections):
+        score, section_reasons = _section_relevance(section, signals)
+        if score >= 4:
+            ranked.append((score, index, section_reasons))
+    ranked.sort(key=lambda item: (-item[0], sections[item[1]].start))
+
+    budget_fallback: set[int] = set()
+    for _score, index, section_reasons in ranked:
+        trial_indices = set(selected_indices)
+        trial_reasons = {key: set(value) for key, value in reasons.items()}
+        trial_indices.add(index)
+        trial_reasons.setdefault(index, set()).update(section_reasons)
+        parent = sections[index].parent_index
+        while parent is not None:
+            trial_indices.add(parent)
+            trial_reasons.setdefault(parent, set()).add("parent_context")
+            parent = sections[parent].parent_index
+        trial_content, trial_audit = _selection_state(
+            source.content,
+            sections,
+            head_end,
+            frozenset(trial_indices),
+            trial_reasons,
+            frozenset(budget_fallback),
+            parse_fallback=False,
+            source_scan_truncated=source.truncated,
+        )
+        try:
+            _fit_agents_index(trial_content, trial_audit)
+        except RuntimeError:
+            budget_fallback.add(index)
+        else:
+            selected_indices = frozenset(trial_indices)
+            reasons = trial_reasons
+
+    content, audit = _selection_state(
+        source.content,
+        sections,
+        head_end,
+        selected_indices,
+        reasons,
+        frozenset(budget_fallback),
+        parse_fallback=False,
+        source_scan_truncated=source.truncated,
+    )
+    audit = _fit_agents_index(content, audit)
+    return CollectedFile(
+        source.name,
+        source.language,
+        None,
+        content,
+        audit.truncated,
+        audit,
+    )
 
 
 def _append_normalized_character(
@@ -392,9 +898,21 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
     return DirectoryTree(tuple(collected), truncated)
 
 
-def collect_project_context(repository: Path) -> ProjectContext:
-    """Collect only fixed root candidates and a bounded two-level directory tree."""
-    instructions = _collect_root_file(repository, "AGENTS.md", "markdown", AGENTS_LIMIT_BYTES)
+def collect_project_context(
+    repository: Path,
+    *,
+    focus: str | None = None,
+    path: str | None = None,
+) -> ProjectContext:
+    """Collect fixed root candidates, selecting AGENTS sections from bounded signals."""
+    signals = _selection_signals(focus, path)
+    raw_instructions = _collect_root_file(
+        repository,
+        "AGENTS.md",
+        "markdown",
+        AGENTS_SCAN_LIMIT_BYTES,
+    )
+    instructions = _select_agents_content(raw_instructions, signals)
     overview = _collect_root_file(repository, "README.md", "markdown", README_LIMIT_BYTES)
     entry_files = tuple(
         _collect_root_file(repository, name, language, ENTRY_FILE_LIMIT_BYTES)
