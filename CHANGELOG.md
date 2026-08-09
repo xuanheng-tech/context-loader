@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+## 0.1.3 - 2026-08-09
+
 - Added: Optional bounded `focus` and repository-relative `path` signals plus a deterministic
   per-source AGENTS selection audit in Markdown and JSON output.
 - Changed: Root `AGENTS.md` loading now combines a 4-KiB head, relevant complete Markdown sections,
@@ -14,8 +16,8 @@ dates.
   wheel and sdist builds, SHA-256 checksums, and refusal to overwrite an existing Release.
 - Changed: Changelog validation now requires one non-empty section for the source version, and
   Gitea Release notes are extracted from that exact section.
-- Release status: These changes were committed to `master` after `v0.1.2`; no later version tag
-  exists.
+- Release status: Released from annotated tag `v0.1.3`; its tag-triggered workflow creates the
+  Gitea Release and verified package artifacts.
 
 ## 0.1.2 - 2026-08-01
 

@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.2\n"
+    assert result.stdout == b"codex-project-context 0.1.3\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.2"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.3"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (

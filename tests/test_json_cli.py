@@ -134,7 +134,7 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
     assert result.stderr == b""
     document = json.loads(result.stdout)
     assert document["schema_version"] == 1
-    assert document["tool"] == {"name": "context-loader", "version": "0.1.2"}
+    assert document["tool"] == {"name": "context-loader", "version": "0.1.3"}
     assert document["repository"] == {
         "requested_path": os.fspath(repo.resolve()),
         "canonical_root": os.fspath(repo.resolve()),
