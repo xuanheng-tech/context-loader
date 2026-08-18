@@ -1,6 +1,6 @@
-# Codex Project Context Loader
+# Context Loader
 
-Codex Project Context Loader renders deterministic, bounded context for one local Git working tree.
+Context Loader renders deterministic, bounded context for one local Git working tree.
 The default CLI output remains Markdown; a stable JSON interface is also available for machine
 callers. The tool reads repository state and a fixed set of root files without fetching, executing
 repository code, network access, or writes to the target repository. Runtime code uses only the
@@ -8,7 +8,8 @@ Python standard library.
 
 ## Open-source quick start
 
-Context Loader 是一个“可确定性导出仓库上下文”的本地命令行工具，面向 agent/机器人场景自动生成稳定的 Markdown 或 JSON 上下文。
+Context Loader is a local CLI that exports repository context deterministically for coding-agent workflows,
+rendering stable Markdown or JSON output.
 
 ```bash
 uv tool install codex-project-context-loader
