@@ -6,6 +6,14 @@ dates.
 
 ## Unreleased
 
+## 0.1.5 - 2026-08-18
+
+- Added: PyPI installation-first guidance and pinned `0.1.5` release docs in README.
+- Added: project metadata URLs (Repository/Issues) for the GitHub source repository.
+- Added: first-party Trusted Publishing workflow for PyPI (`.github/workflows/publish-pypi.yml`) that builds
+  wheels/sdists, uploads artifacts, and publishes via OIDC from `pypa/gh-action-pypi-publish`.
+- Changed: Version bump to `0.1.5`; this release prepares the first PyPI distribution path.
+
 ## 0.1.4 - 2026-08-18
 
 - Added: Apache-2.0 license declaration and repository `LICENSE` file for OSS release readiness.
