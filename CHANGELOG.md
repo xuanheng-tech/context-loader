@@ -6,6 +6,13 @@ dates.
 
 ## Unreleased
 
+## 0.1.4 - 2026-08-18
+
+- Added: Apache-2.0 license declaration and repository `LICENSE` file for OSS release readiness.
+- Added: Public GitHub Open-Source installation section in README.
+- Added: GitHub Actions CI workflow at `.github/workflows/ci.yml` running the existing `just check` quality gate for public forks.
+- Release status: Prepared as the first open-source release candidate on `master`.
+
 ## 0.1.3 - 2026-08-09
 
 - Added: Optional bounded `focus` and repository-relative `path` signals plus a deterministic

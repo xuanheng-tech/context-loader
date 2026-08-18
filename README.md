@@ -6,14 +6,30 @@ callers. The tool reads repository state and a fixed set of root files without f
 repository code, network access, or writes to the target repository. Runtime code uses only the
 Python standard library.
 
+## Open-source quick start
+
+Context Loader 是一个“可确定性导出仓库上下文”的本地命令行工具，面向 agent/机器人场景自动生成稳定的 Markdown 或 JSON 上下文。
+
+```bash
+uv tool install git+https://github.com/xuanheng-tech/context-loader.git
+```
+
+```bash
+codex-project-context --repo /path/to/repo
+```
+
+```bash
+codex-project-context --repo /path/to/repo --format json
+```
+
 ## Install
 
-Current release: `0.1.3`.
+Current release: `0.1.4`.
 
 Install a release wheel with `uv`:
 
 ```bash
-uv tool install /path/to/codex_project_context_loader-0.1.3-py3-none-any.whl
+uv tool install /path/to/codex_project_context_loader-0.1.4-py3-none-any.whl
 ```
 
 The repository also retains `./codex-project-context` as a direct development entry point.
@@ -65,7 +81,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -101,7 +117,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
 `context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
 source's `content`. `sources` contains only file bodies that actually enter the final context, in
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
-`repository` from `global`; version 0.1.3's fixed root-file selection currently emits only
+`repository` from `global`; version 0.1.4's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
@@ -109,7 +125,7 @@ contain heading, heading level, and fixed selection reasons; it never contains t
 target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `0.1.3`. Callers must depend only on fields declared above. The
+integer `1`, while `tool.version` is `0.1.4`. Callers must depend only on fields declared above. The
 document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
@@ -173,7 +189,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1.3 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 0.1.4 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 
