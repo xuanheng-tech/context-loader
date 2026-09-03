@@ -1,0 +1,48 @@
+{
+  "commands": [
+    {
+      "flags": [
+        "--repo",
+        "--focus",
+        "--path",
+        "--format",
+        "--version",
+        "--help"
+      ],
+      "name": "codex-project-context",
+      "operation_class": "read_only",
+      "preconditions": [
+        "repo_is_absolute_git_worktree",
+        "markdown_requires_canonical_root",
+        "json_accepts_path_inside_worktree",
+        "target_path_is_repository_relative"
+      ],
+      "result_statuses": [
+        "CONTEXT_RENDERED",
+        "INVALID_INPUT",
+        "COLLECTION_FAILED"
+      ]
+    }
+  ],
+  "contract_version": 1,
+  "flags": {
+    "format": [
+      "markdown",
+      "json"
+    ],
+    "output": "stdout",
+    "stderr": "bounded_diagnostic_only"
+  },
+  "operation_classes": [
+    "read_only"
+  ],
+  "protected_operations": [
+    "git_mutation",
+    "network_access",
+    "repository_write",
+    "test_execution"
+  ],
+  "schema_version": 1,
+  "tool_name": "context-loader",
+  "tool_version": "0.1.6"
+}

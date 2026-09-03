@@ -6,6 +6,13 @@ dates.
 
 ## Unreleased
 
+## 0.1.6
+
+- Fixed: Correctly render linked worktree `.git` file as `.git` rather than `.git/` in the Directory Tree section.
+- Added: PyPI release workflow quality gates (`just check` prerequisite and tag/version consistency validation).
+- Changed: Explicitly document Python 3.12, Git, and POSIX/Linux platform boundaries in README.
+- Changed: Version bump to `0.1.6`.
+
 ## 0.1.5 - 2026-08-18
 
 - Added: PyPI installation-first guidance and pinned `0.1.5` release docs in README.

@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.5\n"
+    assert result.stdout == b"codex-project-context 0.1.6\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.5"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.6"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (
@@ -915,3 +915,18 @@ def test_configured_fsmonitor_is_not_executed(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert not marker.exists()
+
+
+def test_directory_tree_renders_linked_worktree_git_file(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    worktree_path = tmp_path / "linked-worktree"
+    _git(repo, "worktree", "add", "-b", "feature", os.fspath(worktree_path))
+    assert (worktree_path / ".git").is_file()
+
+    result = _run(worktree_path)
+    assert result.returncode == 0
+    tree = _section(result.stdout.decode("utf-8"), "Directory Tree", None)
+    body = tree.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
+    lines = body.splitlines()
+    assert ".git" in lines
+    assert ".git/" not in lines

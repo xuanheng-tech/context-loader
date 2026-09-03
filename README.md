@@ -29,21 +29,33 @@ codex-project-context --repo /path/to/repo --format json
 
 ## Install
 
-Current release: `0.1.5`.
+Public stable release on PyPI: `0.1.5`.
 
-Install a release wheel with `uv`:
+Install via `uv`:
 
 ```bash
-uv tool install /path/to/codex_project_context_loader-0.1.5-py3-none-any.whl
+uv tool install codex-project-context-loader
 ```
 
-For development or source-based installs, install directly from GitHub as needed:
+Install via `pip`:
+
+```bash
+pip install codex-project-context-loader
+```
+
+For development or source-based installs tracking current repository (`0.1.6`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
 ```
 
 The repository also retains `./codex-project-context` as a direct development entry point.
+
+## Platform and Runtime Requirements
+
+- **Python**: Python 3.12 (`>=3.12,<3.13`). Runtime code uses only the Python standard library with zero runtime dependencies.
+- **Git**: Requires standard `git` CLI installed and available in `PATH`.
+- **Operating System**: POSIX / Linux environment. Windows is currently not supported.
 
 ## Usage
 
@@ -53,8 +65,8 @@ codex-project-context --repo /home/user/projects/example
 codex-project-context --repo /home/user/projects/example --format markdown
 codex-project-context --repo /home/user/projects/example --format json
 codex-project-context --repo /home/user/projects/example \
-  --focus "JoinQuant provider notebook runtime" \
-  --path scripts/joinquant/provider_probe.py
+  --focus "Authentication and session management" \
+  --path auth/session.py
 ```
 
 `--format` defaults to `markdown`. In Markdown mode, `--repo` retains the 0.1.1 contract: it must be
@@ -92,7 +104,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "0.1.5"
+    "version": "0.1.6"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -128,7 +140,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
 `context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
 source's `content`. `sources` contains only file bodies that actually enter the final context, in
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
-`repository` from `global`; version 0.1.5's fixed root-file selection currently emits only
+`repository` from `global`; version 0.1.6's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
@@ -136,7 +148,7 @@ contain heading, heading level, and fixed selection reasons; it never contains t
 target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `0.1.5`. Callers must depend only on fields declared above.
+integer `1`, while `tool.version` is `0.1.6`. Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
@@ -200,7 +212,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1.5 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 0.1.6 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 
@@ -216,6 +228,5 @@ just check
 
 The versions in `pyproject.toml` and `context_loader/__init__.py`, the matching `CHANGELOG.md`
 section, and required tests must change in the same release-preparation batch. `CHANGELOG.md` is the
-authoritative version-change record, and Gitea Release notes are generated from the matching
-section. Merging to `master` is not a release; formal publication still requires a separately
-created and pushed tag.
+authoritative version-change record. Merging to `master` is not a release; formal publication
+still requires a separately created and pushed tag.

@@ -820,9 +820,6 @@ def _classify_entries(
     directories: list[os.DirEntry[str]] = []
     others: list[os.DirEntry[str]] = []
     for entry in scanned:
-        if root_level and entry.name == ".git":
-            directories.append(entry)
-            continue
         try:
             is_directory = entry.is_dir(follow_symlinks=False) and not entry.is_symlink()
         except OSError:
