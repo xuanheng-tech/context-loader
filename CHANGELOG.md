@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+- Integrate the pending Python tooling update and use Node 24 Actions for CI and release records.
+
 - Changed: GitHub is the sole package build and PyPI Trusted Publishing authority; Gitea only
   synchronizes verified public tags and Release records.
 - Added: release identity checks and safe retries for existing packages, partial uploads from the
