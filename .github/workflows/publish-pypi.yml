@@ -5,40 +5,58 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      built: ${{ steps.build.outputs.built }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v10.0.1
       - run: uv python install 3.12.13
       - uses: extractions/setup-just@v3
-      - name: Verify tag matches project version
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PROJECT_VERSION="$(uv run --no-sync python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
-          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
-            echo "Error: Tag version ($TAG_VERSION) does not match pyproject.toml version ($PROJECT_VERSION)"
-            exit 1
-          fi
-      - name: Run quality gate
-        run: just check
-      - name: Build packages
-        run: uv build
+      - name: Verify tag, run just check, and build only an unpublished version
+        id: build
+        run: uv run --no-sync python scripts/release.py build "$GITHUB_REF_NAME" --expected-sha "$GITHUB_SHA"
       - uses: actions/upload-artifact@v6
+        if: steps.build.outputs.built == 'true'
         with:
           name: dist
           path: dist/
 
   publish:
     needs: build
+    if: needs.build.outputs.built == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv python install 3.12.13
       - uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
+      - name: Compare existing files and select only missing original artifacts
+        id: pending
+        run: uv run --no-sync python scripts/release.py pending-dist "$GITHUB_REF_NAME" --expected-sha "$GITHUB_SHA"
       - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.pending.outputs.pending == 'true'
+        with:
+          packages-dir: pending-dist/

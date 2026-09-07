@@ -29,7 +29,7 @@ codex-project-context --repo /path/to/repo --format json
 
 ## Install
 
-Public stable release on PyPI: `0.1.5`.
+Public stable release on PyPI: `0.1.6`.
 
 Install via `uv`:
 
@@ -55,7 +55,18 @@ The repository also retains `./codex-project-context` as a direct development en
 
 - **Python**: Python 3.12 (`>=3.12,<3.13`). Runtime code uses only the Python standard library with zero runtime dependencies.
 - **Git**: Requires standard `git` CLI installed and available in `PATH`.
-- **Operating System**: POSIX / Linux environment. Windows is currently not supported.
+- **Operating System**: supported and locally tested on Ubuntu 24.04 LTS; CI also tests the
+  GitHub-hosted Ubuntu runner. Other Linux/POSIX systems are unverified, not a portability promise.
+  Windows is not supported.
+
+Deterministic means byte-identical output for the same tool version, CLI arguments, canonical
+repository path, readable file contents, directory entries, Git state/local refs, and relevant Git
+configuration, with no concurrent changes. Different checkout paths, permissions, Git versions or
+working-tree contents can change the output. The tool does not freeze a repository snapshot.
+
+Output can contain sensitive information from the repository itself: README/instructions, declared
+commands, paths, branch names and commit subjects. Fixed file selection and size limits are **not
+automatic redaction**. Inspect the output before sharing it with a person or external service.
 
 ## Usage
 
@@ -185,6 +196,9 @@ manual-recovery notice.
 - Recent commits: 8
 
 Truncation occurs only at complete UTF-8 and line boundaries and is marked explicitly.
+These are output/capture limits. Eligible regular files are still streamed to EOF to validate UTF-8
+and reject NUL bytes, including beyond the captured prefix; a large file can therefore take longer
+to read. Symlinked candidate files are skipped, and directory symlinks are not traversed.
 
 ## Git State Semantics
 
@@ -230,3 +244,44 @@ The versions in `pyproject.toml` and `context_loader/__init__.py`, the matching 
 section, and required tests must change in the same release-preparation batch. `CHANGELOG.md` is the
 authoritative version-change record. Merging to `master` is not a release; formal publication
 still requires a separately created and pushed tag.
+
+## Release closure and retries
+
+GitHub `ci` and Gitea `quality` both use `just check`. GitHub `publish-pypi.yml` is the only
+package build/upload authority, using the `pypi` environment and OIDC Trusted Publishing.
+GitHub `release-record` closes the GitHub Release after package publication. Gitea `release`
+only verifies the public release, mirrors its exact formal tag object if missing, and closes
+the Gitea Release record. It builds no package and has no PyPI publishing credentials.
+No private endpoint or credential is needed on GitHub.
+
+Release checks use Python 3.12, Git, and the runner's existing OpenSSL CLI. They compare downloaded
+PyPI file bytes, metadata and SHA-256, plus the publisher/tag/commit claims in PyPI's HTTPS-served
+provenance. This is an identity check, not an independent cryptographic Sigstore verifier.
+
+- Tag/version or expected-commit mismatch and `just check` failure stop before build/upload.
+- A complete matching PyPI version skips both build and upload. Missing/conflicting provenance,
+  unexpected files or differing hashes stop; existing files are never overwritten.
+- If an upload stopped after one file, rerun the **original failed publish job** while its original
+  `dist` artifact is available. It compares the original bytes and selects only missing files.
+  A full rebuild is refused for an incomplete PyPI file set. If the original artifact is gone,
+  stop for recovery; do not substitute a fresh build.
+- If PyPI succeeded but a Release failed, rerun `release-record` on GitHub (manual input: tag)
+  and `release` on Gitea. Existing matching records pass; a missing record is created once;
+  a draft, differing recorded identity or tag conflict stops without overwriting it.
+- Gitea also retries the current project version on `master` pushes, only after that version has
+  a public tag, verified PyPI files and GitHub Release. An unpublished version reports `SKIP`.
+  Use the **built-in Actions job token** for exact missing-tag synchronization: Gitea suppresses
+  recursive workflows for that actor, including old tag workflows. Never use a PAT for this step.
+- Keep historical/private tags and archive refs private. Never mirror all refs or push all tags.
+
+For each formal version, verify both platforms separately (the Gitea API URL and `RELEASE_TOKEN`
+come from the caller's private environment):
+
+```bash
+python scripts/release.py verify vX.Y.Z
+python scripts/release.py verify vX.Y.Z --platform gitea \
+  --api-url "$GITEA_API_URL" --repository "$GITEA_REPOSITORY"
+```
+
+Each check reports tag commit, PyPI file identities and the selected Release ID. Git Finalizer's
+`remote_verified` describes branch publication only; report package/release verification separately.

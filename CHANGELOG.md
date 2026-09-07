@@ -6,6 +6,12 @@ dates.
 
 ## Unreleased
 
+- Changed: GitHub is the sole package build and PyPI Trusted Publishing authority; Gitea only
+  synchronizes verified public tags and Release records.
+- Added: release identity checks and safe retries for existing packages, partial uploads from the
+  original build, and missing Release records; conflicting identities stop publication.
+- Changed: clarify tested platforms, determinism, sensitive output and large-file read limits.
+
 ## 0.1.6
 
 - Fixed: Correctly render linked worktree `.git` file as `.git` rather than `.git/` in the Directory Tree section.

@@ -1,0 +1,36 @@
+name: release-record
+
+on:
+  workflow_run:
+    workflows: [publish-pypi]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published vX.Y.Z tag
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-record-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  record:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv python install 3.12.13
+      - name: Verify package provenance and close GitHub Release
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          RELEASE_TOKEN: ${{ github.token }}
+          PUBLIC_GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --no-sync python scripts/release.py record "$RELEASE_TAG"
