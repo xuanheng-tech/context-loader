@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   record:
@@ -39,6 +40,39 @@ jobs:
           github-token: ""
       - name: Shared quality gate
         run: just check
+      - name: Audit current refs, Releases and workflow runs
+        env:
+          RELEASE_TOKEN: ${{ github.token }}
+          RELEASE_API_URL: ${{ github.api_url }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import os
+          from scripts.release import api
+
+          root = os.environ["RELEASE_API_URL"].rstrip("/") + "/repos/" + os.environ["RELEASE_REPOSITORY"]
+          fields = ("id", "name", "tag_name", "target_commitish", "draft", "prerelease",
+                    "head_sha", "head_branch", "event", "status", "conclusion", "workflow_id",
+                    "run_number", "created_at", "published_at", "html_url")
+          for route in ("branches", "tags", "releases", "actions/runs"):
+              objects = []
+              for page in range(1, 11):
+                  data = api(f"{root}/{route}?limit=100&page={page}", token=os.environ["RELEASE_TOKEN"])
+                  rows = data["workflow_runs"] if route == "actions/runs" else data
+                  if not isinstance(rows, list):
+                      raise SystemExit("release audit response is unavailable")
+                  for row in rows:
+                      item = {key: row[key] for key in fields if key in row}
+                      if "commit" in row:
+                          item["commit"] = row["commit"].get("sha") or row["commit"].get("id")
+                      objects.append(item)
+                  if len(rows) < 100:
+                      break
+              else:
+                  raise SystemExit("release audit exceeds 1000 objects; inspect explicitly")
+              print(json.dumps({"release_audit": route, "objects": objects}, sort_keys=True))
+          PY
       - name: Verify public identity and close Gitea records
         env:
           RELEASE_TAG: ${{ inputs.tag }}
