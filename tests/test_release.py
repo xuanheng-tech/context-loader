@@ -230,6 +230,53 @@ def test_api_refusal_without_a_message_stays_bounded() -> None:
     assert r.detail(exc) == "no detail"
 
 
+def test_public_token_prefers_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PUBLIC_GITHUB_TOKEN", "environment-token")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("the CLI fallback must not run when the environment supplies a token")
+
+    monkeypatch.setattr(r.subprocess, "run", forbidden)
+
+    assert r.github_token() == "environment-token"
+
+
+def test_public_token_falls_back_to_the_authenticated_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PUBLIC_GITHUB_TOKEN", raising=False)
+    seen: list[tuple[str, ...]] = []
+
+    def run(arguments, **_kwargs):
+        seen.append(tuple(arguments))
+        return subprocess.CompletedProcess(arguments, 0, "cli-token\n", "")
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+
+    assert r.github_token() == "cli-token"
+    assert seen == [("gh", "auth", "token")]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        subprocess.CompletedProcess(("gh", "auth", "token"), 1, "", "not logged in"),
+        FileNotFoundError("gh"),
+    ],
+)
+def test_public_token_is_absent_without_an_authenticated_cli(
+    monkeypatch: pytest.MonkeyPatch, outcome
+) -> None:
+    monkeypatch.delenv("PUBLIC_GITHUB_TOKEN", raising=False)
+
+    def run(*_args, **_kwargs):
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+
+    assert r.github_token() == ""
+
+
 def artifacts(path: Path) -> dict[str, str]:
     path.mkdir()
     metadata = f"Name: {r.PACKAGE}\nVersion: 1.2.3\n".encode()

@@ -119,8 +119,31 @@ def api(url: str, **kwargs):
     return None if raw is None else json.loads(raw)
 
 
-def github_tag(tag: str) -> str | None:
+def github_token() -> str:
+    """Return the public read token from the environment, else from an authenticated gh CLI.
+
+    CI supplies PUBLIC_GITHUB_TOKEN. A local caller falls back to the credential the
+    GitHub CLI already holds, so verification is authenticated without this repository
+    storing, printing, or requiring a personal token of its own.
+    """
     token = os.environ.get("PUBLIC_GITHUB_TOKEN", "")
+    if token:
+        return token
+    try:
+        result = subprocess.run(
+            ("gh", "auth", "token"),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def github_tag(tag: str) -> str | None:
+    token = github_token()
     ref = api(f"{GITHUB_API}/repos/{PUBLIC_REPOSITORY}/git/ref/tags/{tag}", token=token)
     if ref is None:
         return None

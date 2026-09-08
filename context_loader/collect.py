@@ -882,7 +882,7 @@ class _TreeLimitReached(Exception):
 
 
 def _classify_entries(
-    file_descriptor: int, *, root_level: bool
+    file_descriptor: int,
 ) -> tuple[list[os.DirEntry[str]], list[os.DirEntry[str]]]:
     with os.scandir(file_descriptor) as iterator:
         scanned = list(iterator)
@@ -914,7 +914,7 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
         return f"{prefix}/{name}" if prefix else name
 
     def walk(file_descriptor: int, prefix: str, depth: int) -> None:
-        directories, others = _classify_entries(file_descriptor, root_level=depth == 0)
+        directories, others = _classify_entries(file_descriptor)
         for entry in directories:
             entry_path = relative(prefix, entry.name)
             if depth == 0 and entry.name == ".git":

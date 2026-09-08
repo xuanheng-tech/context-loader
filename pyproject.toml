@@ -21,6 +21,9 @@ Issues = "https://github.com/xuanheng-tech/context-loader/issues"
 [tool.uv.build-backend]
 module-name = "context_loader"
 module-root = ""
+# The declared public CLI contract ships with the source distribution so a
+# package-only consumer can pin it; the wheel stays runtime-only.
+source-include = ["tool_cli_contract.json"]
 
 [dependency-groups]
 dev = [

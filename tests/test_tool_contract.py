@@ -39,3 +39,13 @@ def test_public_cli_contract_is_consistent() -> None:
     assert declared_flags == parser_flags
     assert {command["operation_class"] for command in contract["commands"]} == {"read_only"}
     assert "/home/" not in contract_path.read_text(encoding="utf-8")
+
+
+def test_source_distribution_ships_the_public_cli_contract() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as stream:
+        build_backend = tomllib.load(stream)["tool"]["uv"]["build-backend"]
+
+    # The contract belongs with the source a consumer can pin against; the wheel
+    # stays runtime-only, so it is deliberately not added to the installed package.
+    assert build_backend["source-include"] == ["tool_cli_contract.json"]
+    assert "wheel-exclude" not in build_backend

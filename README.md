@@ -51,6 +51,11 @@ uv tool install git+https://github.com/xuanheng-tech/context-loader.git
 
 The repository also retains `./codex-project-context` as a direct development entry point.
 
+The wheel installs the runtime package only. The source distribution additionally carries
+`tool_cli_contract.json`, so a package-only consumer can pin the declared public CLI contract
+without cloning. The test suite, `justfile` and lockfile stay in the Git repository and are not
+part of either distribution; run them from a checkout of the matching tag.
+
 ## Platform and Runtime Requirements
 
 - **Python**: Python 3.12 (`>=3.12,<3.13`). Runtime code uses only the Python standard library with zero runtime dependencies.
@@ -307,6 +312,12 @@ provenance. This is an identity check, not an independent cryptographic Sigstore
   Use the **built-in Actions job token** for exact missing-tag synchronization: Gitea suppresses
   recursive workflows for that actor, including old tag workflows. Never use a PAT for this step.
 - Keep historical/private tags and archive refs private. Never mirror all refs or push all tags.
+
+Release verification reads the public GitHub API with `PUBLIC_GITHUB_TOKEN` when it is set, as CI
+does. A local caller without that variable falls back to the credential an authenticated
+[GitHub CLI](https://cli.github.com/) already holds, keeping verification authenticated and clear
+of the unauthenticated rate limit without this repository storing a token. With neither available
+the calls stay unauthenticated and may be rate limited; the reported API message names that cause.
 
 For each formal version, verify both platforms separately (the Gitea API URL and `RELEASE_TOKEN`
 come from the caller's private environment):

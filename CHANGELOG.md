@@ -10,6 +10,14 @@ dates.
   `record` and `verify` no longer fail the propagation race immediately after publication.
 - Changed: a refused release API call reports the bounded server message, so a Release-record
   refusal names its own cause instead of only its status code.
+- Added: the source distribution ships `tool_cli_contract.json`, so a package-only consumer can
+  pin the declared public CLI contract; the wheel stays runtime-only.
+- Changed: release verification resolves the public GitHub API token from `PUBLIC_GITHUB_TOKEN`,
+  falling back to an authenticated GitHub CLI, so the canonical local check is not rate limited.
+- Changed: every third-party Action is now pinned by commit SHA in the CI and release-record
+  workflows as well, matching the publish workflow and the Gitea workflows.
+- Removed: an unused parameter of the internal directory-tree classifier; rendered output,
+  the CLI surface and the JSON contract are unchanged.
 
 ## 0.1.7
 
