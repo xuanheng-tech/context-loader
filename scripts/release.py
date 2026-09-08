@@ -68,6 +68,14 @@ MARKER = "<!-- context-loader-release "
 # a little after upload, so release closure polls instead of failing that race.
 PROPAGATION_ATTEMPTS = 12
 PROPAGATION_DELAY_SECONDS = 15
+# An unauthenticated public read is limited to 60 requests per hour per source
+# address, and the Gitea sync carries no GitHub credential by design. The window is
+# short relative to the job timeout, so a rate-limited refusal is waited out rather
+# than failing the release closure. Only rate limiting is retried; every other
+# refusal, including a permission refusal, still stops immediately.
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_DELAY_SECONDS = 60
+RATE_LIMIT_MAX_DELAY_SECONDS = 180
 
 
 class ReleaseError(ValueError):
@@ -118,6 +126,19 @@ def detail(exc: urllib.error.HTTPError) -> str:
     return message[:200] if isinstance(message, str) else "no detail"
 
 
+def rate_limit_delay(exc: urllib.error.HTTPError) -> float | None:
+    """Seconds to wait when a refusal is a rate limit, or None when it is not one."""
+    if exc.code not in {403, 429}:
+        return None
+    if exc.headers.get("X-RateLimit-Remaining") != "0":
+        return None
+    try:
+        reset = float(exc.headers.get("X-RateLimit-Reset", ""))
+    except (TypeError, ValueError):
+        return RATE_LIMIT_DELAY_SECONDS
+    return min(max(reset - time.time(), 0.0) + 1.0, RATE_LIMIT_MAX_DELAY_SECONDS)
+
+
 def poll(load):
     """Repeat one bounded PyPI read while the published version is still propagating."""
     for remaining in range(PROPAGATION_ATTEMPTS - 1, -1, -1):
@@ -136,15 +157,22 @@ def request(url: str, *, token: str = "", method: str = "GET", data: dict | None
     if body is not None:
         headers["Content-Type"] = "application/json"
     operation = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(operation, timeout=30) as response:
-            raw = response.read(8 * 1024 * 1024 + 1)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404 and method == "GET":
-            return None
-        raise ReleaseError(f"release HTTP {method} failed: {exc.code}: {detail(exc)}") from None
-    except urllib.error.URLError:
-        raise ReleaseError("release HTTP request unavailable") from None
+    for remaining in range(RATE_LIMIT_ATTEMPTS - 1, -1, -1):
+        try:
+            with urllib.request.urlopen(operation, timeout=30) as response:
+                raw = response.read(8 * 1024 * 1024 + 1)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404 and method == "GET":
+                return None
+            delay = rate_limit_delay(exc)
+            if delay is None or not remaining:
+                raise ReleaseError(
+                    f"release HTTP {method} failed: {exc.code}: {detail(exc)}"
+                ) from None
+            time.sleep(delay)
+        except urllib.error.URLError:
+            raise ReleaseError("release HTTP request unavailable") from None
     if len(raw) > 8 * 1024 * 1024:
         raise ReleaseError("release response exceeds 8 MiB")
     return raw
@@ -178,19 +206,33 @@ def github_token() -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def github_tag(tag: str) -> str | None:
-    token = github_token()
-    ref = api(f"{GITHUB_API}/repos/{PUBLIC_REPOSITORY}/git/ref/tags/{tag}", token=token)
-    if ref is None:
+def public_tag_commit(tag: str) -> str | None:
+    """Resolve the commit of the public tag from Git, or None when the tag is absent.
+
+    Tag identity is a Git fact, and the public Git endpoint answers it without a
+    credential. The REST API is rate limited per source address, and the Gitea sync
+    deliberately carries no GitHub credential - its job token must never be sent to
+    GitHub - so reading tag identity over REST made that job fail on a shared address.
+    """
+    listing = command(
+        "git",
+        "ls-remote",
+        "--tags",
+        f"https://github.com/{PUBLIC_REPOSITORY}.git",
+        f"refs/tags/{tag}*",
+    )
+    refs: dict[str, str] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2:
+            refs[fields[1]] = fields[0]
+    # An annotated tag advertises its peeled commit; a lightweight tag points at one.
+    commit = refs.get(f"refs/tags/{tag}^{{}}") or refs.get(f"refs/tags/{tag}")
+    if commit is None:
         return None
-    obj = ref["object"]
-    if obj["type"] == "tag":
-        obj = api(f"{GITHUB_API}/repos/{PUBLIC_REPOSITORY}/git/tags/{obj['sha']}", token=token)[
-            "object"
-        ]
-    if obj["type"] != "commit":
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
         raise ReleaseError("public tag does not resolve to a commit")
-    return obj["sha"]
+    return commit
 
 
 def filenames(version: str, package: str = PACKAGE) -> set[str]:
@@ -405,7 +447,7 @@ def release_record(
     if platform == "github":
         if base != GITHUB_API or repository != PUBLIC_REPOSITORY:
             raise ReleaseError("unexpected GitHub release authority")
-        target = github_tag(release["tag"])
+        target = public_tag_commit(release["tag"])
     else:
         tag = api(f"{root}/tags/{release['tag']}", token=token)
         target = None if tag is None else tag["commit"]["sha"]
@@ -413,7 +455,9 @@ def release_record(
         raise ReleaseError(f"{platform} tag missing or conflicting")
     expected = {"tag": release["tag"], "commit": release["commit"], "files": hashes}
     endpoint = f"{root}/releases/tags/{release['tag']}"
-    record = api(endpoint, token=token)
+    # The Release record is GitHub-only metadata and stays a REST read; authenticate it
+    # whenever a public read credential exists so it is not rate limited either.
+    record = api(endpoint, token=token or (github_token() if platform == "github" else ""))
     created = False
     if record is None and apply:
         if not token:
@@ -461,7 +505,7 @@ def sync_gitea(tag: str, base: str, repository: str) -> dict:
     token = os.environ.get("RELEASE_TOKEN", "")
     if not token:
         raise ReleaseError("RELEASE_TOKEN is missing")
-    public_commit = github_tag(tag)
+    public_commit = public_tag_commit(tag)
     if public_commit is None:
         return {"status": "SKIP", "reason": "version has no public tag"}
     command(
@@ -547,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
             for package in distributions(release["version"]):
                 outputs[f"pending_{archive(package)}"] = str(bool(selected[package])).lower()
         elif args.command != "gate":
-            if github_tag(args.tag) != release["commit"]:
+            if public_tag_commit(args.tag) != release["commit"]:
                 raise ReleaseError("GitHub tag identity conflict")
             hashes = all_pypi_files(release, wait=args.command in ("record", "verify"))
             result["package_verification"] = "MISSING" if hashes is None else "PASS"

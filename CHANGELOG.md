@@ -11,6 +11,13 @@ dates.
   they no longer fail against the canonical rename or require a compatibility
   project that did not exist. `0.1.8` and later still fail closed unless both the
   canonical and the compatibility distribution satisfy the new contract.
+- Fixed: public tag identity is resolved from Git rather than the GitHub REST API.
+  The Gitea sync carries no GitHub credential by design, so its unauthenticated
+  reads were rate limited per source address and the historical backfill failed
+  before it could mirror anything.
+- Fixed: a rate-limited release API read is waited out within a bounded budget
+  instead of failing the closure. Only rate limiting is retried; a permission
+  refusal or any other status still stops immediately.
 
 ## 0.1.8
 

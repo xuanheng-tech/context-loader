@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -201,7 +202,7 @@ def test_release_closure_gives_up_after_bounded_propagation_attempts(
 def test_missing_package_only_waits_for_release_closure(monkeypatch: pytest.MonkeyPatch) -> None:
     waits: list[bool] = []
     monkeypatch.setattr(r, "identity", lambda *_, **__: RELEASE)
-    monkeypatch.setattr(r, "github_tag", lambda _: RELEASE["commit"])
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: RELEASE["commit"])
 
     def all_pypi_files(release, *, complete=True, wait=False):
         waits.append(wait)
@@ -437,6 +438,160 @@ def test_dual_release_missing_one_distribution_fails_closed(
     assert set(hashes) == r.all_filenames("1.2.3")
 
 
+def test_public_tag_identity_uses_git_not_the_rate_limited_rest_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reproduces the Gitea backfill failure: a REST read that 403s without a credential."""
+    commands: list[tuple[str, ...]] = []
+
+    def command(*args):
+        commands.append(args)
+        return (
+            "ac7296567b86d293dbf24c5fa2826cab2ed5c9e4\trefs/tags/v0.1.5\n"
+            "4d80d2ba0eb43b31cd0431a689faf11898801c8f\trefs/tags/v0.1.5^{}\n"
+        )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("tag identity must not reach the rate limited REST API")
+
+    monkeypatch.setattr(r, "command", command)
+    monkeypatch.setattr(r, "api", forbidden)
+
+    # The annotated tag resolves to its peeled commit, never to the tag object.
+    assert r.public_tag_commit("v0.1.5") == "4d80d2ba0eb43b31cd0431a689faf11898801c8f"
+    assert commands == [
+        (
+            "git",
+            "ls-remote",
+            "--tags",
+            f"https://github.com/{r.PUBLIC_REPOSITORY}.git",
+            "refs/tags/v0.1.5*",
+        )
+    ]
+
+
+def test_public_tag_identity_prefers_the_peeled_commit_and_tolerates_neighbours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = (
+        f"{'1' * 40}\trefs/tags/v0.1.5\n"
+        f"{'2' * 40}\trefs/tags/v0.1.5^{{}}\n"
+        f"{'3' * 40}\trefs/tags/v0.1.50\n"
+    )
+    monkeypatch.setattr(r, "command", lambda *_: listing)
+
+    assert r.public_tag_commit("v0.1.5") == "2" * 40
+
+
+def test_public_tag_identity_reports_an_absent_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(r, "command", lambda *_: "")
+
+    assert r.public_tag_commit("v9.9.9") is None
+
+
+def test_lightweight_public_tag_resolves_to_its_own_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(r, "command", lambda *_: f"{'4' * 40}\trefs/tags/v0.1.5\n")
+
+    assert r.public_tag_commit("v0.1.5") == "4" * 40
+
+
+def test_gitea_sync_skips_a_version_without_a_public_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITEA_ACTIONS", "true")
+    monkeypatch.setenv("RELEASE_TOKEN", "gitea-fixture")
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: None)
+    monkeypatch.setattr(r, "api", lambda *_, **__: pytest.fail("no REST call before the tag check"))
+
+    assert r.sync_gitea("v9.9.9", "http://gitea.invalid/api/v1", "org/repo") == {
+        "status": "SKIP",
+        "reason": "version has no public tag",
+    }
+
+
+def _http_error(code: int, headers: dict[str, str], message: str = "boom"):
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/owner/name/releases/tags/v0.1.5",
+        code,
+        "Forbidden",
+        headers,  # type: ignore[arg-type]
+        io.BytesIO(json.dumps({"message": message}).encode()),
+    )
+
+
+def test_rate_limited_read_is_waited_out_within_a_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second Gitea backfill failure: an unauthenticated public read refused 403."""
+    slept: list[float] = []
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    monkeypatch.setattr(r.time, "time", lambda: 1000.0)
+    attempts = 0
+
+    def urlopen(_request, timeout=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _http_error(
+                403,
+                {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1030"},
+                "API rate limit exceeded for 203.0.113.7.",
+            )
+        return contextlib.nullcontext(io.BytesIO(b'{"ok": true}')).__enter__()
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", urlopen)
+
+    assert json.loads(r.request("https://api.github.com/x")) == {"ok": True}
+    assert attempts == 2
+    assert slept == [31.0]  # waits out the reset window, plus one second
+
+
+def test_rate_limit_wait_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(r.time, "time", lambda: 0.0)
+    exc = _http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "999999"})
+
+    assert r.rate_limit_delay(exc) == r.RATE_LIMIT_MAX_DELAY_SECONDS
+
+
+def test_permission_refusal_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    attempts = 0
+
+    def urlopen(_request, timeout=None):
+        nonlocal attempts
+        attempts += 1
+        raise _http_error(
+            403, {"X-RateLimit-Remaining": "59"}, "Resource not accessible by integration"
+        )
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(r.ReleaseError, match="Resource not accessible by integration"):
+        r.request("https://api.github.com/x", method="POST", data={})
+
+    # A permission refusal must stop on the first response, not consume the budget.
+    assert attempts == 1
+    assert slept == []
+
+
+def test_rate_limited_read_gives_up_within_the_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    monkeypatch.setattr(r.time, "time", lambda: 0.0)
+
+    def urlopen(_request, timeout=None):
+        raise _http_error(403, {"X-RateLimit-Remaining": "0"}, "API rate limit exceeded")
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(r.ReleaseError, match="API rate limit exceeded"):
+        r.request("https://api.github.com/x")
+
+    assert len(slept) == r.RATE_LIMIT_ATTEMPTS - 1
+    assert sum(slept) <= r.RATE_LIMIT_ATTEMPTS * r.RATE_LIMIT_MAX_DELAY_SECONDS
+
+
 def artifacts(path: Path) -> dict[str, str]:
     path.mkdir()
     for package in r.DISTRIBUTIONS:
@@ -495,7 +650,7 @@ def test_record_resume_after_post_succeeded_but_readback_failed(monkeypatch) -> 
     record = None
     posts = 0
     fail_readback = True
-    monkeypatch.setattr(r, "github_tag", lambda _: SHA)
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: SHA)
 
     def api(url, **kwargs):
         nonlocal record, posts, fail_readback
@@ -554,7 +709,7 @@ def test_release_conflict_is_fail_closed_without_mutation(monkeypatch, conflict)
     if conflict == "target":
         record["target_commitish"] = "b" * 40
     record["body"] = r.MARKER + json.dumps(marker) + " -->"
-    monkeypatch.setattr(r, "github_tag", lambda _: "b" * 40 if conflict == "tag" else SHA)
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: "b" * 40 if conflict == "tag" else SHA)
 
     def api(url, **kwargs):
         assert kwargs.get("method", "GET") == "GET"
@@ -577,7 +732,7 @@ def test_gitea_backfill_preserves_tag_object_and_does_not_build(
 ) -> None:
     monkeypatch.setenv("GITEA_ACTIONS", "true")
     monkeypatch.setenv("RELEASE_TOKEN", "private-fixture")
-    monkeypatch.setattr(r, "github_tag", lambda _: SHA)
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: SHA)
     monkeypatch.setattr(r, "identity", lambda *_: RELEASE)
     monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {"wheel": "hash"})
 
