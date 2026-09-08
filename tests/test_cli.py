@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.6\n"
+    assert result.stdout == b"codex-project-context 0.1.7\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.6"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.7"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (
@@ -915,6 +915,28 @@ def test_configured_fsmonitor_is_not_executed(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert not marker.exists()
+
+
+def test_heading_dense_agents_still_renders_every_section(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# A\n" * 1_024, encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    assert result.stderr == b""
+    output = result.stdout.decode("utf-8")
+    for title in (
+        "Git State",
+        "Development Instructions",
+        "Project Overview",
+        "Declared Commands",
+        "Project Entry Files",
+        "Recent Commits",
+        "Directory Tree",
+    ):
+        assert f"## {title}\n" in output
+    assert "# A\n" in _section(output, "Development Instructions", "Project Overview")
 
 
 def test_directory_tree_renders_linked_worktree_git_file(tmp_path: Path) -> None:

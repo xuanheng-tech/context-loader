@@ -6,13 +6,34 @@ dates.
 
 ## Unreleased
 
-- Integrate the pending Python tooling update and use Node 24 Actions for CI and release records.
+## 0.1.7
 
-- Changed: GitHub is the sole package build and PyPI Trusted Publishing authority; Gitea only
-  synchronizes verified public tags and Release records.
+- Fixed: AGENTS index fitting no longer re-renders the whole selection audit once per dropped
+  index entry. Fitting now measures each index line once and keeps the same longest fitting
+  prefix, removing the cubic growth in heading count while leaving rendered output unchanged.
+- Fixed: an AGENTS head whose own headings exceed the AGENTS budget now falls back to the bounded
+  head without a section index instead of raising and failing the whole context collection.
+- Fixed: a leading UTF-8 byte order mark is removed from the root `AGENTS.md` before heading
+  parsing, so a heading on the first line is recognized instead of being folded into the head.
+- Fixed: `Omitted source characters` is measured against the whole normalized source, so a bounded
+  source scan that ends before EOF no longer reports `0` omitted characters alongside a truncated
+  selection.
+- Added: the release build refuses a non-empty `dist/` and refuses any produced file set other
+  than the current version's wheel and sdist, so a leftover artifact cannot be treated as the
+  current release.
 - Added: release identity checks and safe retries for existing packages, partial uploads from the
   original build, and missing Release records; conflicting identities stop publication.
+- Changed: GitHub is the sole package build and PyPI Trusted Publishing authority; Gitea only
+  synchronizes verified public tags and Release records.
+- Changed: every third-party Action in the PyPI release workflow is pinned by commit SHA with a
+  version comment.
+- Changed: integrate the pending Python tooling update and use Node 24 Actions for CI and release
+  records.
+- Changed: document that Git is used from the fixed absolute path `/usr/bin/git` rather than
+  through `PATH`, and document the authority boundary between transported repository-root context
+  and agent-harness instruction-hierarchy resolution.
 - Changed: clarify tested platforms, determinism, sensitive output and large-file read limits.
+- Changed: Version bump to `0.1.7`.
 
 ## 0.1.6
 

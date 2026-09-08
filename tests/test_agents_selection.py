@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from context_loader import collect
 from context_loader.collect import (
     AGENTS_HEAD_LIMIT_BYTES,
     AGENTS_LIMIT_BYTES,
+    AGENTS_SCAN_LIMIT_BYTES,
     _parse_markdown_sections,
     collect_project_context,
     render_agents_selection_audit,
@@ -41,6 +45,25 @@ def _long_joinquant_agents() -> str:
         "Before implementing a provider extractor, probe the actual runtime and record the callable.\n"
     )
     return "".join(parts)
+
+
+def _heading_dense_agents(headings: int) -> str:
+    parts = ["# Root\n\nIntro about authentication.\n\n"]
+    for index in range(1, headings + 1):
+        parts.append(
+            f"## Section {index} authentication policy\n\n"
+            f"Rules about authentication and session handling for module {index}.\n"
+            + ("filler text line about authentication\n" * 3)
+            + "\n"
+        )
+    return "".join(parts)
+
+
+def _aggregate(source) -> int:
+    assert source.selection is not None
+    return len(source.content.encode("utf-8")) + len(
+        render_agents_selection_audit(source.selection).encode("utf-8")
+    )
 
 
 def _entry(source, heading: str):
@@ -217,3 +240,75 @@ def test_agents_budget_constant_and_legacy_collection_call_remain_compatible(
 
     assert AGENTS_LIMIT_BYTES == 16 * 1024
     assert project.instructions.content == "# Demo\nlegacy call\n"
+
+
+def test_index_fitting_renders_the_audit_a_bounded_number_of_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headings = 800
+    content = _heading_dense_agents(headings)
+    assert len(content.encode("utf-8")) <= AGENTS_SCAN_LIMIT_BYTES
+    renders = 0
+    original = collect.render_agents_selection_audit
+
+    def counting(audit):
+        nonlocal renders
+        renders += 1
+        return original(audit)
+
+    monkeypatch.setattr(collect, "render_agents_selection_audit", counting)
+
+    source = _collect(tmp_path, content, focus="authentication session policy module")
+
+    # Dropping one index entry at a time and re-rendering the whole audit grew with
+    # the square of the heading count; fitting now renders a fixed number of times
+    # per candidate section.
+    assert renders <= 4 * headings
+    assert source.selection is not None
+    assert source.selection.index_truncated is True
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+def test_heading_dense_head_degrades_instead_of_failing_collection(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("# A\n" * 1_024, encoding="utf-8")
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+
+    project = collect_project_context(repo)
+
+    source = project.instructions
+    assert source.status is None
+    assert source.selection is not None
+    assert source.selection.parse_fallback is False
+    assert source.selection.indexed_only_sections == ()
+    assert source.content.startswith("# A\n")
+    assert len(source.content.encode("utf-8")) <= AGENTS_HEAD_LIMIT_BYTES
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+    assert project.overview.content == "# Overview\n"
+
+
+def test_leading_byte_order_mark_does_not_hide_the_first_heading(tmp_path: Path) -> None:
+    content = "\ufeff# Project Identity\n\nintro\n\n## Core Rules\nKeep the invariant.\n"
+
+    source = _collect(tmp_path, content)
+
+    assert source.content == content[1:]
+    assert source.selection is not None
+    assert [entry.heading for entry in source.selection.selected_sections] == [
+        "Project Identity",
+        "Core Rules",
+    ]
+    assert source.selection.chars_omitted == 0
+
+
+def test_truncated_source_scan_reports_the_whole_omitted_source(tmp_path: Path) -> None:
+    content = "X" * (AGENTS_SCAN_LIMIT_BYTES + 4_096)
+
+    source = _collect(tmp_path, content)
+
+    assert source.selection is not None
+    assert source.selection.source_scan_truncated is True
+    assert source.selection.truncated is True
+    assert source.selection.chars_omitted == len(content) - source.selection.chars_selected
+    assert source.selection.chars_omitted > 0

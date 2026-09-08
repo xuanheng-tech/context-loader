@@ -102,8 +102,56 @@ def test_published_package_skips_build(repository: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(r, "command", command)
     monkeypatch.setattr(r, "pypi_files", lambda _: {"existing": "hash"})
-    assert r.build(identity) is False
+    assert r.build(identity, repository / "dist") is False
     assert actions == [("just", "check")]
+
+
+def test_existing_dist_artifact_stops_before_build(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = r.identity(TAG)
+    original = r.command
+    actions = []
+
+    def command(*args):
+        if args[0] == "git":
+            return original(*args)
+        actions.append(args)
+        return ""
+
+    monkeypatch.setattr(r, "command", command)
+    monkeypatch.setattr(r, "pypi_files", lambda _: None)
+    dist = repository / "dist"
+    dist.mkdir()
+    (dist / ".gitignore").write_text("*\n")
+    (dist / f"{r.ARCHIVE}-1.2.3-py3-none-any.whl").write_bytes(b"stale")
+
+    with pytest.raises(r.ReleaseError, match="build only into an empty dist"):
+        r.build(identity, dist)
+
+    assert actions == [("just", "check")]
+
+
+def test_unexpected_build_output_is_rejected(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    identity = r.identity(TAG)
+    original = r.command
+    dist = repository / "dist"
+
+    def command(*args):
+        if args[0] == "git":
+            return original(*args)
+        if args == ("uv", "build"):
+            dist.mkdir(exist_ok=True)
+            (dist / f"{r.ARCHIVE}-9.9.9-py3-none-any.whl").write_bytes(b"wrong version")
+        return ""
+
+    monkeypatch.setattr(r, "command", command)
+    monkeypatch.setattr(r, "pypi_files", lambda _: None)
+
+    with pytest.raises(r.ReleaseError, match="unexpected artifact set"):
+        r.build(identity, dist)
 
 
 def artifacts(path: Path) -> dict[str, str]:

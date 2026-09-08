@@ -29,7 +29,7 @@ codex-project-context --repo /path/to/repo --format json
 
 ## Install
 
-Public stable release on PyPI: `0.1.6`.
+Public stable release on PyPI: `0.1.7`.
 
 Install via `uv`:
 
@@ -43,7 +43,7 @@ Install via `pip`:
 pip install codex-project-context-loader
 ```
 
-For development or source-based installs tracking current repository (`0.1.6`):
+For development or source-based installs tracking current repository (`0.1.7`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -54,7 +54,10 @@ The repository also retains `./codex-project-context` as a direct development en
 ## Platform and Runtime Requirements
 
 - **Python**: Python 3.12 (`>=3.12,<3.13`). Runtime code uses only the Python standard library with zero runtime dependencies.
-- **Git**: Requires standard `git` CLI installed and available in `PATH`.
+- **Git**: Requires the standard `git` CLI at the fixed absolute path `/usr/bin/git`. The
+  executable is never resolved through `PATH`, so an installation elsewhere is not used and
+  every invocation fails with exit `1`. Git runs with a sanitized environment that ignores
+  system, global and per-command configuration, attributes, and hooks.
 - **Operating System**: supported and locally tested on Ubuntu 24.04 LTS; CI also tests the
   GitHub-hosted Ubuntu runner. Other Linux/POSIX systems are unverified, not a portability promise.
   Windows is not supported.
@@ -115,7 +118,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "0.1.6"
+    "version": "0.1.7"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -151,7 +154,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
 `context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
 source's `content`. `sources` contains only file bodies that actually enter the final context, in
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
-`repository` from `global`; version 0.1.6's fixed root-file selection currently emits only
+`repository` from `global`; version 0.1.7's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
@@ -159,9 +162,24 @@ contain heading, heading level, and fixed selection reasons; it never contains t
 target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `0.1.6`. Callers must depend only on fields declared above.
+integer `1`, while `tool.version` is `0.1.7`. Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
+
+## Authority Boundary
+
+Context Loader is a bounded transport for repository-root context, not the authority for a
+repository's instruction hierarchy. It reads the fixed root candidates listed below, renders them
+under explicit limits, and stops there.
+
+Resolving an instruction hierarchy stays with the calling agent harness. That includes any
+shared or user-level instruction file outside the repository, nested or scoped `AGENTS.md` files
+under subdirectories, and any include or import directive written inside an instruction file:
+such a directive is transported as literal text and is never followed. `--path` selects sections
+of the repository-root `AGENTS.md` only; it never changes which files are read.
+
+A successful run therefore proves that the bounded root context was collected and rendered. It
+does not prove that every instruction applicable to a task has been loaded.
 
 ## Supported Root Files
 
@@ -175,12 +193,19 @@ Only these exact files directly under the Git root are eligible:
 Lowercase `justfile` takes precedence over `Justfile`. Nested files, lockfiles, CI configuration,
 `.env`, and glob-discovered files are not read.
 
+A leading UTF-8 byte order mark is removed from the root `AGENTS.md` before parsing, so a
+heading on the first line is still recognized as a heading.
+
 The root `AGENTS.md` is split at Markdown headings outside fenced code blocks. The output always
 starts with complete early sections fitting a 4-KiB head, then adds complete relevant sections in
 source order using exact normalized focus/path tokens and their parent context. Remaining headings
 appear in an explicit index whose body text is not loaded. With no selection signals, only the small
 head and index are emitted. Unsafe heading parsing falls back to a bounded head and an explicit
-manual-recovery notice.
+manual-recovery notice. A head whose own headings would not fit the budget falls back to the same
+bounded head without a section index; a single instruction file never fails the whole collection.
+
+`Omitted source characters` is measured against the whole normalized source, so a bounded source
+scan that ends before EOF still reports the characters it could not select.
 
 ## Limits
 
@@ -226,7 +251,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1.6 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 0.1.7 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 
@@ -259,6 +284,9 @@ PyPI file bytes, metadata and SHA-256, plus the publisher/tag/commit claims in P
 provenance. This is an identity check, not an independent cryptographic Sigstore verifier.
 
 - Tag/version or expected-commit mismatch and `just check` failure stop before build/upload.
+- The build refuses to run unless `dist/` is empty, and refuses any produced file set other than
+  the current version's wheel and sdist. A leftover artifact can carry a release filename while
+  holding different bytes, so it is never treated as the current release.
 - A complete matching PyPI version skips both build and upload. Missing/conflicting provenance,
   unexpected files or differing hashes stop; existing files are never overwritten.
 - If an upload stopped after one file, rerun the **original failed publish job** while its original

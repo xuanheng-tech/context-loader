@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "codex-project-context-loader"
-version = "0.1.6"
+version = "0.1.7"
 description = "Render deterministic local Git context for Codex"
 license = { file = "LICENSE" }
 readme = "README.md"

@@ -10,6 +10,7 @@ import re
 import stat
 import tomllib
 import unicodedata
+from bisect import bisect_right
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -160,6 +161,7 @@ class CollectedFile:
     content: str = ""
     truncated: bool = False
     selection: AgentsSelectionAudit | None = None
+    source_characters: int = 0
 
     @property
     def is_text(self) -> bool:
@@ -253,11 +255,18 @@ def _ordered_reasons(reasons: set[str] | frozenset[str]) -> tuple[str, ...]:
     return tuple(reason for reason in _SELECTION_REASON_ORDER if reason in reasons)
 
 
+_AUDIT_EMPTY_LIST_LINE = "- None."
+
+
 def _audit_heading(heading: str) -> str:
     safe = heading.replace("`", r"\x60").strip()
     if len(safe) <= 160:
         return safe
     return f"{safe[:159]}…"
+
+
+def _audit_index_line(entry: AgentsSectionAuditEntry) -> str:
+    return f"- H{entry.heading_level} {_audit_heading(entry.heading)}"
 
 
 def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
@@ -278,7 +287,7 @@ def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
             reasons = ", ".join(entry.reasons)
             lines.append(f"- {label} — `{reasons}`")
     else:
-        lines.append("- None.")
+        lines.append(_AUDIT_EMPTY_LIST_LINE)
     lines.extend(
         (
             "",
@@ -287,9 +296,9 @@ def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
     )
     if audit.indexed_only_sections:
         for entry in audit.indexed_only_sections:
-            lines.append(f"- H{entry.heading_level} {_audit_heading(entry.heading)}")
+            lines.append(_audit_index_line(entry))
     else:
-        lines.append("- None.")
+        lines.append(_AUDIT_EMPTY_LIST_LINE)
         if audit.truncated and not audit.index_truncated:
             lines.append("- Omitted content has no available heading index; read the source path.")
     if audit.index_truncated:
@@ -427,11 +436,15 @@ def _merge_intervals(intervals: list[tuple[int, int]]) -> tuple[tuple[int, int],
     return tuple(merged)
 
 
-def _interval_is_covered(start: int, end: int, intervals: tuple[tuple[int, int], ...]) -> bool:
-    return any(
-        selected_start <= start and end <= selected_end
-        for selected_start, selected_end in intervals
-    )
+def _interval_is_covered(
+    start: int,
+    end: int,
+    intervals: tuple[tuple[int, int], ...],
+    starts: tuple[int, ...],
+) -> bool:
+    """Whether one merged interval covers [start, end); intervals are disjoint and sorted."""
+    position = bisect_right(starts, start) - 1
+    return position >= 0 and end <= intervals[position][1]
 
 
 def _selection_state(
@@ -444,19 +457,23 @@ def _selection_state(
     *,
     parse_fallback: bool,
     source_scan_truncated: bool,
+    source_characters: int,
 ) -> tuple[str, AgentsSelectionAudit]:
     intervals = [(0, head_end)] if head_end else []
     intervals.extend((sections[index].start, sections[index].end) for index in selected_indices)
     merged = _merge_intervals(intervals)
+    merged_starts = tuple(start for start, _end in merged)
     selected_content = "".join(content[start:end] for start, end in merged)
 
     selected_entries: list[AgentsSectionAuditEntry] = []
     document_head_end = sections[0].start if sections else len(content)
-    if document_head_end and _interval_is_covered(0, min(document_head_end, head_end), merged):
+    if document_head_end and _interval_is_covered(
+        0, min(document_head_end, head_end), merged, merged_starts
+    ):
         selected_entries.append(AgentsSectionAuditEntry("Document head", 0, ("head",)))
     indexed_entries: list[AgentsSectionAuditEntry] = []
     for index, section in enumerate(sections):
-        if _interval_is_covered(section.start, section.end, merged):
+        if _interval_is_covered(section.start, section.end, merged, merged_starts):
             entry_reasons = set(reasons.get(index, set()))
             if section.end <= head_end:
                 entry_reasons.add("head")
@@ -477,7 +494,9 @@ def _selection_state(
             )
 
     chars_selected = sum(end - start for start, end in merged)
-    chars_omitted = max(0, len(content) - chars_selected)
+    # The scanned prefix can be shorter than the file, so omission is measured
+    # against the whole normalized source rather than the captured prefix.
+    chars_omitted = max(0, source_characters - chars_selected)
     audit = AgentsSelectionAudit(
         source="AGENTS.md",
         selected_sections=tuple(selected_entries),
@@ -496,46 +515,82 @@ def _aggregate_agents_bytes(content: str, audit: AgentsSelectionAudit) -> int:
 
 
 def _fit_agents_index(content: str, audit: AgentsSelectionAudit) -> AgentsSelectionAudit:
+    """Keep the longest leading index prefix that fits the AGENTS budget.
+
+    A truncated index renders one line per retained entry in place of the single
+    empty-list placeholder, so every candidate size follows from the placeholder
+    render plus a prefix sum of entry line lengths. Sizes grow strictly with the
+    retained count, which selects the same prefix the earlier per-step re-render
+    chose while rendering the audit a fixed number of times.
+    """
     if _aggregate_agents_bytes(content, audit) <= AGENTS_LIMIT_BYTES:
         return audit
-    indexed = list(audit.indexed_only_sections)
-    while indexed:
-        indexed.pop()
-        candidate = replace(audit, indexed_only_sections=tuple(indexed), index_truncated=True)
-        if _aggregate_agents_bytes(content, candidate) <= AGENTS_LIMIT_BYTES:
-            return candidate
-    candidate = replace(audit, indexed_only_sections=(), index_truncated=True)
-    if _aggregate_agents_bytes(content, candidate) > AGENTS_LIMIT_BYTES:
+    entries = audit.indexed_only_sections
+    without_index = replace(audit, indexed_only_sections=(), index_truncated=True)
+    without_index_bytes = _aggregate_agents_bytes(content, without_index)
+    fixed_bytes = without_index_bytes - len(_AUDIT_EMPTY_LIST_LINE.encode("utf-8")) - 1
+    retained = 0
+    entry_bytes = 0
+    for position, entry in enumerate(entries[:-1]):
+        entry_bytes += len(_audit_index_line(entry).encode("utf-8")) + 1
+        if fixed_bytes + entry_bytes > AGENTS_LIMIT_BYTES:
+            break
+        retained = position + 1
+    if retained:
+        return replace(audit, indexed_only_sections=entries[:retained], index_truncated=True)
+    if without_index_bytes > AGENTS_LIMIT_BYTES:
         raise RuntimeError("AGENTS head and selection audit exceed the AGENTS budget")
-    return candidate
+    return without_index
+
+
+def _without_byte_order_mark(source: CollectedFile) -> CollectedFile:
+    """Drop one leading UTF-8 BOM so a first-line heading still parses as a heading."""
+    if not source.content.startswith("\ufeff"):
+        return source
+    return replace(
+        source,
+        content=source.content[1:],
+        source_characters=max(0, source.source_characters - 1),
+    )
+
+
+def _bounded_head_fallback(source: CollectedFile, *, parse_fallback: bool) -> CollectedFile:
+    """Return a byte-bounded head with no section index.
+
+    The head never exceeds AGENTS_HEAD_LIMIT_BYTES and the audit carries no index
+    entries, so the result always fits the larger AGENTS budget.
+    """
+    head_end = _line_safe_prefix_end(source.content, AGENTS_HEAD_LIMIT_BYTES)
+    content, audit = _selection_state(
+        source.content,
+        (),
+        head_end,
+        frozenset(),
+        {},
+        frozenset(),
+        parse_fallback=parse_fallback,
+        source_scan_truncated=source.truncated,
+        source_characters=source.source_characters,
+    )
+    audit = _fit_agents_index(content, audit)
+    return CollectedFile(
+        source.name,
+        source.language,
+        None,
+        content,
+        audit.truncated,
+        audit,
+    )
 
 
 def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) -> CollectedFile:
     if not source.is_text:
         return source
+    source = _without_byte_order_mark(source)
     try:
         sections = _parse_markdown_sections(source.content)
     except MarkdownSectionParseError:
-        head_end = _line_safe_prefix_end(source.content, AGENTS_HEAD_LIMIT_BYTES)
-        content, audit = _selection_state(
-            source.content,
-            (),
-            head_end,
-            frozenset(),
-            {},
-            frozenset(),
-            parse_fallback=True,
-            source_scan_truncated=source.truncated,
-        )
-        audit = _fit_agents_index(content, audit)
-        return CollectedFile(
-            source.name,
-            source.language,
-            None,
-            content,
-            audit.truncated,
-            audit,
-        )
+        return _bounded_head_fallback(source, parse_fallback=True)
 
     head_end = _small_head_end(source.content, sections)
     selected_indices: frozenset[int] = frozenset()
@@ -567,6 +622,7 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
             frozenset(budget_fallback),
             parse_fallback=False,
             source_scan_truncated=source.truncated,
+            source_characters=source.source_characters,
         )
         try:
             _fit_agents_index(trial_content, trial_audit)
@@ -585,8 +641,14 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         frozenset(budget_fallback),
         parse_fallback=False,
         source_scan_truncated=source.truncated,
+        source_characters=source.source_characters,
     )
-    audit = _fit_agents_index(content, audit)
+    try:
+        audit = _fit_agents_index(content, audit)
+    except RuntimeError:
+        # A heading-dense head can outgrow the budget on its own; degrade this one
+        # source instead of failing the whole context collection.
+        return _bounded_head_fallback(source, parse_fallback=False)
     return CollectedFile(
         source.name,
         source.language,
@@ -609,34 +671,39 @@ def _append_normalized_character(
     return True
 
 
-def _read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, str | None]:
+def _read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, str | None, int]:
+    """Capture a bounded normalized prefix and count the whole normalized source."""
     decoder = codecs.getincrementaldecoder("utf-8")("strict")
     capture = bytearray()
     last_line_boundary = 0
     overflow = False
     pending_carriage_return = False
+    source_characters = 0
 
-    def consume(decoded: str) -> None:
-        nonlocal last_line_boundary, overflow, pending_carriage_return
+    def append(character: str) -> None:
+        nonlocal last_line_boundary, overflow
         if overflow:
             return
+        if not _append_normalized_character(capture, character, limit):
+            overflow = True
+            return
+        if character == "\n":
+            last_line_boundary = len(capture)
+
+    def consume(decoded: str) -> None:
+        nonlocal pending_carriage_return, source_characters
         for character in decoded:
             if pending_carriage_return:
                 pending_carriage_return = False
-                if not _append_normalized_character(capture, "\n", limit):
-                    overflow = True
-                    return
-                last_line_boundary = len(capture)
+                source_characters += 1
+                append("\n")
                 if character == "\n":
                     continue
             if character == "\r":
                 pending_carriage_return = True
                 continue
-            if not _append_normalized_character(capture, character, limit):
-                overflow = True
-                return
-            if character == "\n":
-                last_line_boundary = len(capture)
+            source_characters += 1
+            append(character)
 
     try:
         while True:
@@ -644,22 +711,20 @@ def _read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, s
             if not raw:
                 break
             if b"\0" in raw:
-                return "", False, SKIPPED_ENCODING
+                return "", False, SKIPPED_ENCODING, 0
             consume(decoder.decode(raw, final=False))
         consume(decoder.decode(b"", final=True))
-        if not overflow and pending_carriage_return:
-            if _append_normalized_character(capture, "\n", limit):
-                last_line_boundary = len(capture)
-            else:
-                overflow = True
+        if pending_carriage_return:
+            source_characters += 1
+            append("\n")
     except UnicodeDecodeError:
-        return "", False, SKIPPED_ENCODING
+        return "", False, SKIPPED_ENCODING, 0
     except OSError:
-        return "", False, SKIPPED_UNREADABLE
+        return "", False, SKIPPED_UNREADABLE, 0
 
     if overflow:
         del capture[last_line_boundary:]
-    return capture.decode("utf-8"), overflow, None
+    return capture.decode("utf-8"), overflow, None, source_characters
 
 
 def _collect_root_file(root: Path, name: str, language: str, limit: int) -> CollectedFile:
@@ -689,14 +754,18 @@ def _collect_root_file(root: Path, name: str, language: str, limit: int) -> Coll
     try:
         if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
             return CollectedFile(name, language, SKIPPED_NOT_REGULAR)
-        content, truncated, error_status = _read_validated_text(file_descriptor, limit)
+        content, truncated, error_status, source_characters = _read_validated_text(
+            file_descriptor, limit
+        )
     except OSError:
         return CollectedFile(name, language, SKIPPED_UNREADABLE)
     finally:
         os.close(file_descriptor)
     if error_status is not None:
         return CollectedFile(name, language, error_status)
-    return CollectedFile(name, language, None, content, truncated)
+    return CollectedFile(
+        name, language, None, content, truncated, source_characters=source_characters
+    )
 
 
 def _root_name_exists(root: Path, name: str) -> bool:

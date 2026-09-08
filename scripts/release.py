@@ -200,12 +200,26 @@ def pypi_files(release: dict, *, complete: bool = True) -> dict[str, str] | None
     return hashes
 
 
-def build(release: dict) -> bool:
+def dist_artifacts(dist: Path) -> list[str]:
+    if not dist.is_dir():
+        return []
+    return sorted(entry.name for entry in dist.iterdir() if entry.name != ".gitignore")
+
+
+def build(release: dict, dist: Path) -> bool:
     identity(release["tag"], release["commit"], checkout=True)
     command("just", "check")
     if pypi_files(release) is not None:
         return False
+    # An artifact left in dist can carry a release filename while holding different
+    # bytes, so only an empty dist may be built into and only the expected pair may
+    # come out of the build.
+    if dist_artifacts(dist):
+        raise ReleaseError("dist already holds artifacts; build only into an empty dist")
     command("uv", "build")
+    produced = dist_artifacts(dist)
+    if set(produced) != filenames(release["version"]):
+        raise ReleaseError("build produced an unexpected artifact set")
     return True
 
 
@@ -395,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         result = {"tag": args.tag, "commit": release["commit"]}
         outputs = {}
         if args.command == "build":
-            outputs["built"] = str(build(release)).lower()
+            outputs["built"] = str(build(release, args.dist)).lower()
         elif args.command == "pending-dist":
             result["pending"] = pending_dist(release, args.dist, args.output)
             outputs["pending"] = str(bool(result["pending"])).lower()
