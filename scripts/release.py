@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import tomllib
 import urllib.error
 import urllib.parse
@@ -36,6 +37,10 @@ ARCHIVE = PACKAGE.replace("-", "_")
 GITHUB_API = "https://api.github.com"
 TAG_RE = re.compile(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
 MARKER = "<!-- context-loader-release "
+# PyPI serves a freshly uploaded version from its index and integrity endpoints
+# a little after upload, so release closure polls instead of failing that race.
+PROPAGATION_ATTEMPTS = 12
+PROPAGATION_DELAY_SECONDS = 15
 
 
 class ReleaseError(ValueError):
@@ -68,6 +73,25 @@ def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = Fals
     return {"tag": tag, "version": version, "commit": commit, "notes": notes}
 
 
+def detail(exc: urllib.error.HTTPError) -> str:
+    """Return the bounded API error message; responses carry no request credentials."""
+    try:
+        message = json.loads(exc.read(4096).decode("utf-8")).get("message")
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        return "no detail"
+    return message[:200] if isinstance(message, str) else "no detail"
+
+
+def poll(load):
+    """Repeat one bounded PyPI read while the published version is still propagating."""
+    for remaining in range(PROPAGATION_ATTEMPTS - 1, -1, -1):
+        value = load()
+        if value is not None or not remaining:
+            return value
+        time.sleep(PROPAGATION_DELAY_SECONDS)
+    return None
+
+
 def request(url: str, *, token: str = "", method: str = "GET", data: dict | None = None):
     headers = {"Accept": "application/json", "User-Agent": "context-loader-release"}
     if token:
@@ -82,7 +106,7 @@ def request(url: str, *, token: str = "", method: str = "GET", data: dict | None
     except urllib.error.HTTPError as exc:
         if exc.code == 404 and method == "GET":
             return None
-        raise ReleaseError(f"release HTTP {method} failed: {exc.code}") from None
+        raise ReleaseError(f"release HTTP {method} failed: {exc.code}: {detail(exc)}") from None
     except urllib.error.URLError:
         raise ReleaseError("release HTTP request unavailable") from None
     if len(raw) > 8 * 1024 * 1024:
@@ -132,9 +156,10 @@ def check_artifact(name: str, raw: bytes, version: str) -> None:
         raise ReleaseError("package artifact identity mismatch")
 
 
-def check_provenance(item: dict, release: dict) -> None:
+def check_provenance(item: dict, release: dict, *, wait: bool = False) -> None:
     name = item["filename"]
-    provenance = api(f"https://pypi.org/integrity/{PACKAGE}/{release['version']}/{name}/provenance")
+    url = f"https://pypi.org/integrity/{PACKAGE}/{release['version']}/{name}/provenance"
+    provenance = poll(lambda: api(url)) if wait else api(url)
     if provenance is None:
         raise ReleaseError("PyPI provenance missing; do not rebuild or upload")
     for bundle in provenance["attestation_bundles"]:
@@ -174,8 +199,11 @@ def check_provenance(item: dict, release: dict) -> None:
     raise ReleaseError("PyPI publisher/commit/file provenance conflict")
 
 
-def pypi_files(release: dict, *, complete: bool = True) -> dict[str, str] | None:
-    doc = api(f"https://pypi.org/pypi/{PACKAGE}/{release['version']}/json")
+def pypi_files(
+    release: dict, *, complete: bool = True, wait: bool = False
+) -> dict[str, str] | None:
+    url = f"https://pypi.org/pypi/{PACKAGE}/{release['version']}/json"
+    doc = poll(lambda: api(url)) if wait else api(url)
     if doc is None:
         return None
     if doc["info"]["name"] != PACKAGE or doc["info"]["version"] != release["version"]:
@@ -195,7 +223,7 @@ def pypi_files(release: dict, *, complete: bool = True) -> dict[str, str] | None
         if digest != item["digests"]["sha256"] or len(raw) != item["size"]:
             raise ReleaseError("PyPI downloaded file digest/size conflict")
         check_artifact(item["filename"], raw, release["version"])
-        check_provenance(item, release)
+        check_provenance(item, release, wait=wait)
         hashes[item["filename"]] = digest
     return hashes
 
@@ -342,7 +370,7 @@ def sync_gitea(tag: str, base: str, repository: str) -> dict:
         f"refs/tags/{tag}:refs/tags/{tag}",
     )
     release = identity(tag, public_commit)
-    hashes = pypi_files(release)
+    hashes = pypi_files(release, wait=True)
     if hashes is None:
         return {
             "status": "SKIP",
@@ -416,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command != "gate":
             if github_tag(args.tag) != release["commit"]:
                 raise ReleaseError("GitHub tag identity conflict")
-            hashes = pypi_files(release)
+            hashes = pypi_files(release, wait=args.command in ("record", "verify"))
             result["package_verification"] = "MISSING" if hashes is None else "PASS"
             result["files"] = hashes
             if args.command in ("record", "verify"):

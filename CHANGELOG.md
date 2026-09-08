@@ -6,6 +6,11 @@ dates.
 
 ## Unreleased
 
+- Fixed: release closure polls the PyPI index and integrity endpoints for a bounded period, so
+  `record` and `verify` no longer fail the propagation race immediately after publication.
+- Changed: a refused release API call reports the bounded server message, so a Release-record
+  refusal names its own cause instead of only its status code.
+
 ## 0.1.7
 
 - Fixed: AGENTS index fitting no longer re-renders the whole selection audit once per dropped

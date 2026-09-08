@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -154,6 +155,81 @@ def test_unexpected_build_output_is_rejected(
         r.build(identity, dist)
 
 
+def test_release_closure_waits_out_pypi_propagation(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    responses = [None, None, {"ready": True}]
+    calls = 0
+
+    def load():
+        nonlocal calls
+        calls += 1
+        return responses[calls - 1]
+
+    value = r.poll(load)
+
+    assert value == {"ready": True}
+    assert calls == 3
+    assert slept == [r.PROPAGATION_DELAY_SECONDS, r.PROPAGATION_DELAY_SECONDS]
+
+
+def test_release_closure_gives_up_after_bounded_propagation_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(r.time, "sleep", slept.append)
+    calls = 0
+
+    def load():
+        nonlocal calls
+        calls += 1
+        return None
+
+    assert r.poll(load) is None
+    assert calls == r.PROPAGATION_ATTEMPTS
+    assert len(slept) == r.PROPAGATION_ATTEMPTS - 1
+
+
+def test_missing_package_only_waits_for_release_closure(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits: list[bool] = []
+    monkeypatch.setattr(r, "identity", lambda *_, **__: RELEASE)
+    monkeypatch.setattr(r, "github_tag", lambda _: RELEASE["commit"])
+
+    def pypi_files(release, *, complete=True, wait=False):
+        waits.append(wait)
+        return None
+
+    monkeypatch.setattr(r, "pypi_files", pypi_files)
+
+    assert r.main(["package-state", TAG]) == 0
+    assert r.main(["record", TAG]) == 1
+    assert waits == [False, True]
+
+
+def test_api_refusal_reports_the_bounded_server_message() -> None:
+    exc = urllib.error.HTTPError(
+        "https://api.github.com/repos/owner/name/releases",
+        403,
+        "Forbidden",
+        {},  # type: ignore[arg-type]
+        io.BytesIO(json.dumps({"message": "Resource not accessible by integration"}).encode()),
+    )
+
+    assert r.detail(exc) == "Resource not accessible by integration"
+
+
+def test_api_refusal_without_a_message_stays_bounded() -> None:
+    exc = urllib.error.HTTPError(
+        "https://api.github.com/repos/owner/name/releases",
+        403,
+        "Forbidden",
+        {},
+        io.BytesIO(b"<html>"),
+    )  # type: ignore[arg-type]
+
+    assert r.detail(exc) == "no detail"
+
+
 def artifacts(path: Path) -> dict[str, str]:
     path.mkdir()
     metadata = f"Name: {r.PACKAGE}\nVersion: 1.2.3\n".encode()
@@ -280,7 +356,7 @@ def test_gitea_backfill_preserves_tag_object_and_does_not_build(
     monkeypatch.setenv("RELEASE_TOKEN", "private-fixture")
     monkeypatch.setattr(r, "github_tag", lambda _: SHA)
     monkeypatch.setattr(r, "identity", lambda *_: RELEASE)
-    monkeypatch.setattr(r, "pypi_files", lambda _: {"wheel": "hash"})
+    monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {"wheel": "hash"})
 
     def api(url, **kwargs):
         if url.endswith("/org/repo"):
