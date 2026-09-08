@@ -6,6 +6,12 @@ dates.
 
 ## Unreleased
 
+- Fixed: release verification selects the distribution model of the release being
+  verified. Tags before `0.1.8` shipped one distribution under the legacy name, so
+  they no longer fail against the canonical rename or require a compatibility
+  project that did not exist. `0.1.8` and later still fail closed unless both the
+  canonical and the compatibility distribution satisfy the new contract.
+
 ## 0.1.8
 
 - Fixed: release closure polls the PyPI index and integrity endpoints for a bounded period, so

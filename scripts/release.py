@@ -38,10 +38,27 @@ PACKAGE = "context-loader"
 COMPAT_PACKAGE = "codex-project-context-loader"
 DISTRIBUTIONS = (PACKAGE, COMPAT_PACKAGE)
 COMPAT_ROOT = f"compat/{COMPAT_PACKAGE}"
+# The split starts at 0.1.8. Every earlier tag shipped one distribution under the
+# legacy name, so those releases are verified against the model that existed then
+# and are never expected to have a canonical counterpart.
+DUAL_DISTRIBUTION_VERSION = (0, 1, 8)
 
 
 def archive(package: str) -> str:
     return package.replace("-", "_")
+
+
+def is_dual(version: str) -> bool:
+    return tuple(int(part) for part in version.split(".")) >= DUAL_DISTRIBUTION_VERSION
+
+
+def canonical_package(version: str) -> str:
+    """The distribution that carries the runtime for this release."""
+    return PACKAGE if is_dual(version) else COMPAT_PACKAGE
+
+
+def distributions(version: str) -> tuple[str, ...]:
+    return DISTRIBUTIONS if is_dual(version) else (COMPAT_PACKAGE,)
 
 
 GITHUB_API = "https://api.github.com"
@@ -75,18 +92,19 @@ def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = Fals
     project = tomllib.loads(command("git", "show", f"{commit}:pyproject.toml"))["project"]
     package = command("git", "show", f"{commit}:context_loader/__init__.py")
     version = tag[1:]
-    if project["name"] != PACKAGE or project["version"] != version:
+    if project["name"] != canonical_package(version) or project["version"] != version:
         raise ReleaseError("tag/project version mismatch")
     if re.search(rf'^__version__ = "{re.escape(version)}"$', package, re.MULTILINE) is None:
         raise ReleaseError("package version declarations disagree")
-    compat = tomllib.loads(command("git", "show", f"{commit}:{COMPAT_ROOT}/pyproject.toml"))
-    if (
-        compat["project"]["name"] != COMPAT_PACKAGE
-        or compat["project"]["version"] != version
-        or compat["project"].get("dependencies") != [f"{PACKAGE}=={version}"]
-        or "scripts" in compat["project"]
-    ):
-        raise ReleaseError("compatibility distribution does not pin this canonical release")
+    if is_dual(version):
+        compat = tomllib.loads(command("git", "show", f"{commit}:{COMPAT_ROOT}/pyproject.toml"))
+        if (
+            compat["project"]["name"] != COMPAT_PACKAGE
+            or compat["project"]["version"] != version
+            or compat["project"].get("dependencies") != [f"{PACKAGE}=={version}"]
+            or "scripts" in compat["project"]
+        ):
+            raise ReleaseError("compatibility distribution does not pin this canonical release")
     notes = extract_tag(command("git", "show", f"{commit}:CHANGELOG.md"), tag)
     return {"tag": tag, "version": version, "commit": commit, "notes": notes}
 
@@ -181,7 +199,7 @@ def filenames(version: str, package: str = PACKAGE) -> set[str]:
 
 
 def all_filenames(version: str) -> set[str]:
-    return set().union(*(filenames(version, package) for package in DISTRIBUTIONS))
+    return set().union(*(filenames(version, package) for package in distributions(version)))
 
 
 def check_artifact(name: str, raw: bytes, version: str, package: str = PACKAGE) -> None:
@@ -200,7 +218,7 @@ def check_artifact(name: str, raw: bytes, version: str, package: str = PACKAGE) 
     parsed = BytesParser().parsebytes(metadata)
     if parsed["Name"] != package or parsed["Version"] != version:
         raise ReleaseError("package artifact identity mismatch")
-    if package == COMPAT_PACKAGE:
+    if package == COMPAT_PACKAGE and is_dual(version):
         required = f"{PACKAGE}=={version}"
         if [value.strip() for value in parsed.get_all("Requires-Dist") or []] != [required]:
             raise ReleaseError("compatibility distribution must depend only on the canonical pin")
@@ -252,8 +270,9 @@ def check_provenance(
 
 
 def pypi_files(
-    release: dict, *, package: str = PACKAGE, complete: bool = True, wait: bool = False
+    release: dict, *, package: str | None = None, complete: bool = True, wait: bool = False
 ) -> dict[str, str] | None:
+    package = package or canonical_package(release["version"])
     url = f"https://pypi.org/pypi/{package}/{release['version']}/json"
     doc = poll(lambda: api(url)) if wait else api(url)
     if doc is None:
@@ -285,7 +304,7 @@ def all_pypi_files(
 ) -> dict[str, str] | None:
     """Merge both distributions' verified files, or None while any is unpublished."""
     merged: dict[str, str] = {}
-    for package in DISTRIBUTIONS:
+    for package in distributions(release["version"]):
         hashes = pypi_files(release, package=package, complete=complete, wait=wait)
         if hashes is None:
             return None
@@ -312,7 +331,8 @@ def build(release: dict, dist: Path) -> bool:
     # Both distributions are built from this one release commit into one dist
     # directory; their archive names never collide.
     command("uv", "build", "--out-dir", os.fspath(dist))
-    command("uv", "build", "--project", COMPAT_ROOT, "--out-dir", os.fspath(dist))
+    if is_dual(release["version"]):
+        command("uv", "build", "--project", COMPAT_ROOT, "--out-dir", os.fspath(dist))
     produced = dist_artifacts(dist)
     if set(produced) != all_filenames(release["version"]):
         raise ReleaseError("build produced an unexpected artifact set")
@@ -327,7 +347,7 @@ def pending_dist(release: dict, source: Path, output: Path) -> dict[str, list[st
     ):
         raise ReleaseError("expected the original wheel and sdist of both distributions only")
     pending: dict[str, list[str]] = {}
-    for package in DISTRIBUTIONS:
+    for package in distributions(release["version"]):
         existing = pypi_files(release, package=package, complete=False) or {}
         selected = []
         for name in sorted(filenames(release["version"], package)):
@@ -400,7 +420,9 @@ def release_record(
             raise ReleaseError("RELEASE_TOKEN is missing")
         body = (
             release["notes"]
-            + f"\n\nPackage: https://pypi.org/project/{PACKAGE}/{release['version']}/"
+            + "\n\nPackage: "
+            + f"https://pypi.org/project/{canonical_package(release['version'])}/"
+            + f"{release['version']}/"
             + f"\n\nSource commit: `{release['commit']}`\n\n"
             + MARKER
             + json.dumps(expected, sort_keys=True)
@@ -522,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
             selected = pending_dist(release, args.dist, args.output)
             result["pending"] = selected
             outputs["pending"] = str(any(selected.values())).lower()
-            for package in DISTRIBUTIONS:
+            for package in distributions(release["version"]):
                 outputs[f"pending_{archive(package)}"] = str(bool(selected[package])).lower()
         elif args.command != "gate":
             if github_tag(args.tag) != release["commit"]:
