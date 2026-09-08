@@ -289,6 +289,12 @@ provenance. This is an identity check, not an independent cryptographic Sigstore
   holding different bytes, so it is never treated as the current release.
 - A complete matching PyPI version skips both build and upload. Missing/conflicting provenance,
   unexpected files or differing hashes stop; existing files are never overwritten.
+- Release closure runs right after publication, so `record`, `verify` and the Gitea sync poll the
+  PyPI index and integrity endpoints for a bounded period before treating a version as missing.
+  Build and upload selection never poll: there, an absent version still means "not yet published".
+- A refused release API call reports the bounded server message alongside its status code. A
+  GitHub Release is created against the release commit, so that commit must already be reachable
+  from the public branch; pushing the release commit to the public branch precedes record closure.
 - If an upload stopped after one file, rerun the **original failed publish job** while its original
   `dist` artifact is available. It compares the original bytes and selects only missing files.
   A full rebuild is refused for an incomplete PyPI file set. If the original artifact is gone,
