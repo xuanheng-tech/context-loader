@@ -130,15 +130,15 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     lock = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8"))
     lock_package = next(
-        package for package in lock["package"] if package["name"] == "codex-project-context-loader"
+        package for package in lock["package"] if package["name"] == "context-loader"
     )
     entry_point = project["project"]["scripts"]["codex-project-context"]
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.7\n"
+    assert result.stdout == b"codex-project-context 0.1.8\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.7"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.8"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (

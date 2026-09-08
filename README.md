@@ -12,11 +12,11 @@ Context Loader is a local CLI that exports repository context deterministically 
 rendering stable Markdown or JSON output.
 
 ```bash
-uv tool install codex-project-context-loader
+uv tool install context-loader
 ```
 
 ```bash
-pip install codex-project-context-loader
+pip install context-loader
 ```
 
 ```bash
@@ -29,27 +29,39 @@ codex-project-context --repo /path/to/repo --format json
 
 ## Install
 
-Public stable release on PyPI: `0.1.7`.
+Public stable release on PyPI: `0.1.8`.
 
 Install via `uv`:
 
 ```bash
-uv tool install codex-project-context-loader
+uv tool install context-loader
 ```
 
 Install via `pip`:
 
 ```bash
-pip install codex-project-context-loader
+pip install context-loader
 ```
 
-For development or source-based installs tracking current repository (`0.1.7`):
+For development or source-based installs tracking current repository (`0.1.8`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
 ```
 
 The repository also retains `./codex-project-context` as a direct development entry point.
+
+### Distributions
+
+From `0.1.8` the canonical PyPI distribution is **`context-loader`**. It carries the
+`context_loader` runtime and installs the `codex-project-context` console script; the CLI name,
+the JSON schema version and the public contract are unchanged by the rename.
+
+**`codex-project-context-loader`** remains published as a compatibility distribution. From
+`0.1.8` it contains no runtime and no console script and only depends on `context-loader==0.1.8`,
+so installing either name yields exactly one implementation and one CLI. Existing pins keep
+working, and releases `0.1.5`-`0.1.7` of the old name are unchanged. New integrations should
+depend on `context-loader`.
 
 The wheel installs the runtime package only. The source distribution additionally carries
 `tool_cli_contract.json`, so a package-only consumer can pin the declared public CLI contract
@@ -123,7 +135,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "0.1.7"
+    "version": "0.1.8"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -159,7 +171,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
 `context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
 source's `content`. `sources` contains only file bodies that actually enter the final context, in
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
-`repository` from `global`; version 0.1.7's fixed root-file selection currently emits only
+`repository` from `global`; version 0.1.8's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
@@ -167,7 +179,7 @@ contain heading, heading level, and fixed selection reasons; it never contains t
 target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `0.1.7`. Callers must depend only on fields declared above.
+integer `1`, while `tool.version` is `0.1.8`. Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
@@ -256,7 +268,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 0.1.7 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 0.1.8 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[project]
+name = "codex-project-context-loader"
+version = "0.1.8"
+description = "Compatibility distribution; installs the context-loader package"
+requires-python = ">=3.12,<3.13"
+dependencies = ["context-loader==0.1.8"]
+
+[tool.uv.build-backend]
+module-name = "codex_project_context_loader"
+module-root = ""

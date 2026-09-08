@@ -3,8 +3,8 @@ requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [project]
-name = "codex-project-context-loader"
-version = "0.1.7"
+name = "context-loader"
+version = "0.1.8"
 description = "Render deterministic local Git context for Codex"
 license = { file = "LICENSE" }
 readme = "README.md"

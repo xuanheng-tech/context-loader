@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+## 0.1.8
+
 - Fixed: release closure polls the PyPI index and integrity endpoints for a bounded period, so
   `record` and `verify` no longer fail the propagation race immediately after publication.
 - Changed: a refused release API call reports the bounded server message, so a Release-record
@@ -18,6 +20,15 @@ dates.
   workflows as well, matching the publish workflow and the Gitea workflows.
 - Removed: an unused parameter of the internal directory-tree classifier; rendered output,
   the CLI surface and the JSON contract are unchanged.
+- Changed: the canonical PyPI distribution is now `context-loader`. It carries the same
+  `context_loader` runtime and the unchanged `codex-project-context` console script, and the
+  public CLI surface and JSON schema version 1 are unchanged.
+- Added: `codex-project-context-loader` continues as a compatibility distribution that only
+  depends on `context-loader==0.1.8`. It ships no runtime and no console script, so installing
+  either distribution provides exactly one implementation. Releases 0.1.5-0.1.7 stay untouched.
+- Changed: the release workflow builds, publishes and verifies both distributions, each through
+  its own Trusted Publishing exchange, and release records cover the files of both.
+- Changed: Version bump to `0.1.8`.
 
 ## 0.1.7
 

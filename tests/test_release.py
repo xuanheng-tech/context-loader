@@ -33,7 +33,15 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo / "pyproject.toml").write_text(f'[project]\nname = "{r.PACKAGE}"\nversion = "1.2.3"\n')
     (repo / "context_loader/__init__.py").write_text('__version__ = "1.2.3"\n')
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n## 1.2.3\n\n- Notes\n")
-    subprocess.run(["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md"], check=True)
+    compat = repo / r.COMPAT_ROOT
+    compat.mkdir(parents=True)
+    (compat / "pyproject.toml").write_text(
+        f'[project]\nname = "{r.COMPAT_PACKAGE}"\nversion = "1.2.3"\n'
+        f'dependencies = ["{r.PACKAGE}==1.2.3"]\n'
+    )
+    subprocess.run(
+        ["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md", "compat"], check=True
+    )
     subprocess.run(
         [
             "git",
@@ -102,7 +110,7 @@ def test_published_package_skips_build(repository: Path, monkeypatch: pytest.Mon
         return ""
 
     monkeypatch.setattr(r, "command", command)
-    monkeypatch.setattr(r, "pypi_files", lambda _: {"existing": "hash"})
+    monkeypatch.setattr(r, "all_pypi_files", lambda _: {"existing": "hash"})
     assert r.build(identity, repository / "dist") is False
     assert actions == [("just", "check")]
 
@@ -121,11 +129,11 @@ def test_existing_dist_artifact_stops_before_build(
         return ""
 
     monkeypatch.setattr(r, "command", command)
-    monkeypatch.setattr(r, "pypi_files", lambda _: None)
+    monkeypatch.setattr(r, "all_pypi_files", lambda _: None)
     dist = repository / "dist"
     dist.mkdir()
     (dist / ".gitignore").write_text("*\n")
-    (dist / f"{r.ARCHIVE}-1.2.3-py3-none-any.whl").write_bytes(b"stale")
+    (dist / f"{r.archive(r.PACKAGE)}-1.2.3-py3-none-any.whl").write_bytes(b"stale")
 
     with pytest.raises(r.ReleaseError, match="build only into an empty dist"):
         r.build(identity, dist)
@@ -143,13 +151,13 @@ def test_unexpected_build_output_is_rejected(
     def command(*args):
         if args[0] == "git":
             return original(*args)
-        if args == ("uv", "build"):
+        if args[:2] == ("uv", "build"):
             dist.mkdir(exist_ok=True)
-            (dist / f"{r.ARCHIVE}-9.9.9-py3-none-any.whl").write_bytes(b"wrong version")
+            (dist / f"{r.archive(r.PACKAGE)}-9.9.9-py3-none-any.whl").write_bytes(b"wrong version")
         return ""
 
     monkeypatch.setattr(r, "command", command)
-    monkeypatch.setattr(r, "pypi_files", lambda _: None)
+    monkeypatch.setattr(r, "all_pypi_files", lambda _: None)
 
     with pytest.raises(r.ReleaseError, match="unexpected artifact set"):
         r.build(identity, dist)
@@ -195,11 +203,11 @@ def test_missing_package_only_waits_for_release_closure(monkeypatch: pytest.Monk
     monkeypatch.setattr(r, "identity", lambda *_, **__: RELEASE)
     monkeypatch.setattr(r, "github_tag", lambda _: RELEASE["commit"])
 
-    def pypi_files(release, *, complete=True, wait=False):
+    def all_pypi_files(release, *, complete=True, wait=False):
         waits.append(wait)
         return None
 
-    monkeypatch.setattr(r, "pypi_files", pypi_files)
+    monkeypatch.setattr(r, "all_pypi_files", all_pypi_files)
 
     assert r.main(["package-state", TAG]) == 0
     assert r.main(["record", TAG]) == 1
@@ -279,30 +287,46 @@ def test_public_token_is_absent_without_an_authenticated_cli(
 
 def artifacts(path: Path) -> dict[str, str]:
     path.mkdir()
-    metadata = f"Name: {r.PACKAGE}\nVersion: 1.2.3\n".encode()
-    wheel = path / f"{r.ARCHIVE}-1.2.3-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr(f"{r.ARCHIVE}-1.2.3.dist-info/METADATA", metadata)
-    source = path / f"{r.ARCHIVE}-1.2.3.tar.gz"
-    with tarfile.open(source, "w:gz") as archive:
-        member = tarfile.TarInfo(f"{r.ARCHIVE}-1.2.3/PKG-INFO")
-        member.size = len(metadata)
-        archive.addfile(member, io.BytesIO(metadata))
+    for package in r.DISTRIBUTIONS:
+        stem = r.archive(package)
+        fields = f"Name: {package}\nVersion: 1.2.3\n"
+        if package == r.COMPAT_PACKAGE:
+            fields += f"Requires-Dist: {r.PACKAGE}==1.2.3\n"
+        metadata = fields.encode()
+        with zipfile.ZipFile(path / f"{stem}-1.2.3-py3-none-any.whl", "w") as archive:
+            archive.writestr(f"{stem}-1.2.3.dist-info/METADATA", metadata)
+        with tarfile.open(path / f"{stem}-1.2.3.tar.gz", "w:gz") as archive:
+            member = tarfile.TarInfo(f"{stem}-1.2.3/PKG-INFO")
+            member.size = len(metadata)
+            archive.addfile(member, io.BytesIO(metadata))
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in path.iterdir()}
 
 
 def test_partial_upload_reuses_only_missing_original_file(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "dist"
     hashes = artifacts(source)
-    wheel = next(name for name in hashes if name.endswith(".whl"))
-    monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {wheel: hashes[wheel]})
+    canonical_wheel = f"{r.archive(r.PACKAGE)}-1.2.3-py3-none-any.whl"
+
+    def published(release, *, package=r.PACKAGE, complete=True, wait=False):
+        return {canonical_wheel: hashes[canonical_wheel]} if package == r.PACKAGE else {}
+
+    monkeypatch.setattr(r, "pypi_files", published)
     output = tmp_path / "pending"
     pending = r.pending_dist(RELEASE, source, output)
-    assert pending == [next(name for name in hashes if name.endswith(".tar.gz"))]
-    assert {p.name for p in output.iterdir()} == set(pending)
-    assert (output / pending[0]).read_bytes() == (source / pending[0]).read_bytes()
+
+    assert pending[r.PACKAGE] == [f"{r.archive(r.PACKAGE)}-1.2.3.tar.gz"]
+    assert pending[r.COMPAT_PACKAGE] == sorted(r.filenames("1.2.3", r.COMPAT_PACKAGE))
+    assert {p.name for p in output.iterdir()} == set(r.DISTRIBUTIONS)
+    for package, names in pending.items():
+        assert {p.name for p in (output / package).iterdir()} == set(names)
+        for name in names:
+            assert (output / package / name).read_bytes() == (source / name).read_bytes()
+
     monkeypatch.setattr(r, "pypi_files", lambda *_, **__: hashes)
-    assert r.pending_dist(RELEASE, source, tmp_path / "retry") == []
+    assert r.pending_dist(RELEASE, source, tmp_path / "retry") == {
+        r.PACKAGE: [],
+        r.COMPAT_PACKAGE: [],
+    }
 
 
 def test_existing_file_conflict_stops_before_upload_selection(tmp_path: Path, monkeypatch) -> None:

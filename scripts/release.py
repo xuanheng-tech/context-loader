@@ -32,8 +32,18 @@ except ModuleNotFoundError:
     from changelog import extract_tag
 
 PUBLIC_REPOSITORY = "xuanheng-tech/context-loader"
-PACKAGE = "codex-project-context-loader"
-ARCHIVE = PACKAGE.replace("-", "_")
+# 0.1.8 splits the published identity: the canonical distribution carries the runtime
+# and the console script, and the legacy name stays as a shim that depends on it.
+PACKAGE = "context-loader"
+COMPAT_PACKAGE = "codex-project-context-loader"
+DISTRIBUTIONS = (PACKAGE, COMPAT_PACKAGE)
+COMPAT_ROOT = f"compat/{COMPAT_PACKAGE}"
+
+
+def archive(package: str) -> str:
+    return package.replace("-", "_")
+
+
 GITHUB_API = "https://api.github.com"
 TAG_RE = re.compile(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
 MARKER = "<!-- context-loader-release "
@@ -69,6 +79,14 @@ def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = Fals
         raise ReleaseError("tag/project version mismatch")
     if re.search(rf'^__version__ = "{re.escape(version)}"$', package, re.MULTILINE) is None:
         raise ReleaseError("package version declarations disagree")
+    compat = tomllib.loads(command("git", "show", f"{commit}:{COMPAT_ROOT}/pyproject.toml"))
+    if (
+        compat["project"]["name"] != COMPAT_PACKAGE
+        or compat["project"]["version"] != version
+        or compat["project"].get("dependencies") != [f"{PACKAGE}=={version}"]
+        or "scripts" in compat["project"]
+    ):
+        raise ReleaseError("compatibility distribution does not pin this canonical release")
     notes = extract_tag(command("git", "show", f"{commit}:CHANGELOG.md"), tag)
     return {"tag": tag, "version": version, "commit": commit, "notes": notes}
 
@@ -157,11 +175,16 @@ def github_tag(tag: str) -> str | None:
     return obj["sha"]
 
 
-def filenames(version: str) -> set[str]:
-    return {f"{ARCHIVE}-{version}-py3-none-any.whl", f"{ARCHIVE}-{version}.tar.gz"}
+def filenames(version: str, package: str = PACKAGE) -> set[str]:
+    stem = archive(package)
+    return {f"{stem}-{version}-py3-none-any.whl", f"{stem}-{version}.tar.gz"}
 
 
-def check_artifact(name: str, raw: bytes, version: str) -> None:
+def all_filenames(version: str) -> set[str]:
+    return set().union(*(filenames(version, package) for package in DISTRIBUTIONS))
+
+
+def check_artifact(name: str, raw: bytes, version: str, package: str = PACKAGE) -> None:
     if name.endswith(".whl"):
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             paths = [p for p in archive.namelist() if p.endswith(".dist-info/METADATA")]
@@ -175,13 +198,19 @@ def check_artifact(name: str, raw: bytes, version: str) -> None:
                 raise ReleaseError("ambiguous source metadata")
             metadata = archive.extractfile(paths[0]).read()
     parsed = BytesParser().parsebytes(metadata)
-    if parsed["Name"] != PACKAGE or parsed["Version"] != version:
+    if parsed["Name"] != package or parsed["Version"] != version:
         raise ReleaseError("package artifact identity mismatch")
+    if package == COMPAT_PACKAGE:
+        required = f"{PACKAGE}=={version}"
+        if [value.strip() for value in parsed.get_all("Requires-Dist") or []] != [required]:
+            raise ReleaseError("compatibility distribution must depend only on the canonical pin")
 
 
-def check_provenance(item: dict, release: dict, *, wait: bool = False) -> None:
+def check_provenance(
+    item: dict, release: dict, *, package: str = PACKAGE, wait: bool = False
+) -> None:
     name = item["filename"]
-    url = f"https://pypi.org/integrity/{PACKAGE}/{release['version']}/{name}/provenance"
+    url = f"https://pypi.org/integrity/{package}/{release['version']}/{name}/provenance"
     provenance = poll(lambda: api(url)) if wait else api(url)
     if provenance is None:
         raise ReleaseError("PyPI provenance missing; do not rebuild or upload")
@@ -223,17 +252,17 @@ def check_provenance(item: dict, release: dict, *, wait: bool = False) -> None:
 
 
 def pypi_files(
-    release: dict, *, complete: bool = True, wait: bool = False
+    release: dict, *, package: str = PACKAGE, complete: bool = True, wait: bool = False
 ) -> dict[str, str] | None:
-    url = f"https://pypi.org/pypi/{PACKAGE}/{release['version']}/json"
+    url = f"https://pypi.org/pypi/{package}/{release['version']}/json"
     doc = poll(lambda: api(url)) if wait else api(url)
     if doc is None:
         return None
-    if doc["info"]["name"] != PACKAGE or doc["info"]["version"] != release["version"]:
+    if doc["info"]["name"] != package or doc["info"]["version"] != release["version"]:
         raise ReleaseError("PyPI project/version conflict")
     items = doc["urls"]
     names = {item["filename"] for item in items}
-    expected = filenames(release["version"])
+    expected = filenames(release["version"], package)
     if len(names) != len(items) or not names <= expected or (complete and names != expected):
         raise ReleaseError("PyPI file set incomplete/conflicting; resume the original publish job")
     hashes = {}
@@ -245,10 +274,23 @@ def pypi_files(
         digest = hashlib.sha256(raw).hexdigest()
         if digest != item["digests"]["sha256"] or len(raw) != item["size"]:
             raise ReleaseError("PyPI downloaded file digest/size conflict")
-        check_artifact(item["filename"], raw, release["version"])
-        check_provenance(item, release, wait=wait)
+        check_artifact(item["filename"], raw, release["version"], package)
+        check_provenance(item, release, package=package, wait=wait)
         hashes[item["filename"]] = digest
     return hashes
+
+
+def all_pypi_files(
+    release: dict, *, complete: bool = True, wait: bool = False
+) -> dict[str, str] | None:
+    """Merge both distributions' verified files, or None while any is unpublished."""
+    merged: dict[str, str] = {}
+    for package in DISTRIBUTIONS:
+        hashes = pypi_files(release, package=package, complete=complete, wait=wait)
+        if hashes is None:
+            return None
+        merged.update(hashes)
+    return merged
 
 
 def dist_artifacts(dist: Path) -> list[str]:
@@ -260,41 +302,56 @@ def dist_artifacts(dist: Path) -> list[str]:
 def build(release: dict, dist: Path) -> bool:
     identity(release["tag"], release["commit"], checkout=True)
     command("just", "check")
-    if pypi_files(release) is not None:
+    if all_pypi_files(release) is not None:
         return False
     # An artifact left in dist can carry a release filename while holding different
     # bytes, so only an empty dist may be built into and only the expected pair may
     # come out of the build.
     if dist_artifacts(dist):
         raise ReleaseError("dist already holds artifacts; build only into an empty dist")
-    command("uv", "build")
+    # Both distributions are built from this one release commit into one dist
+    # directory; their archive names never collide.
+    command("uv", "build", "--out-dir", os.fspath(dist))
+    command("uv", "build", "--project", COMPAT_ROOT, "--out-dir", os.fspath(dist))
     produced = dist_artifacts(dist)
-    if set(produced) != filenames(release["version"]):
+    if set(produced) != all_filenames(release["version"]):
         raise ReleaseError("build produced an unexpected artifact set")
     return True
 
 
-def pending_dist(release: dict, source: Path, output: Path) -> list[str]:
-    expected = filenames(release["version"])
+def pending_dist(release: dict, source: Path, output: Path) -> dict[str, list[str]]:
+    """Select only the missing original artifacts, grouped by target PyPI project."""
     paths = {p.name: p for p in source.iterdir() if p.name != ".gitignore"}
-    if set(paths) != expected or any(not p.is_file() or p.is_symlink() for p in paths.values()):
-        raise ReleaseError("expected original wheel and sdist only")
-    existing = pypi_files(release, complete=False) or {}
-    pending = []
-    for name, path in sorted(paths.items()):
-        raw = path.read_bytes()
-        check_artifact(name, raw, release["version"])
-        digest = hashlib.sha256(raw).hexdigest()
-        if name in existing:
-            if existing[name] != digest:
-                raise ReleaseError(
-                    "existing PyPI file differs from original build; refusing upload"
-                )
-        else:
-            pending.append(name)
+    if set(paths) != all_filenames(release["version"]) or any(
+        not p.is_file() or p.is_symlink() for p in paths.values()
+    ):
+        raise ReleaseError("expected the original wheel and sdist of both distributions only")
+    pending: dict[str, list[str]] = {}
+    for package in DISTRIBUTIONS:
+        existing = pypi_files(release, package=package, complete=False) or {}
+        selected = []
+        for name in sorted(filenames(release["version"], package)):
+            raw = paths[name].read_bytes()
+            check_artifact(name, raw, release["version"], package)
+            digest = hashlib.sha256(raw).hexdigest()
+            if name in existing:
+                if existing[name] != digest:
+                    raise ReleaseError(
+                        "existing PyPI file differs from original build; refusing upload"
+                    )
+            else:
+                selected.append(name)
+        pending[package] = selected
+    # Nothing is written until every distribution passed its identity comparison, so a
+    # refusal leaves no partial upload directory behind.
     output.mkdir()  # A fresh job-owned directory; never clean or overwrite caller data.
-    for name in pending:
-        shutil.copyfile(paths[name], output / name)
+    for package, names in pending.items():
+        if not names:
+            continue
+        project_output = output / package
+        project_output.mkdir()
+        for name in names:
+            shutil.copyfile(paths[name], project_output / name)
     return pending
 
 
@@ -393,7 +450,7 @@ def sync_gitea(tag: str, base: str, repository: str) -> dict:
         f"refs/tags/{tag}:refs/tags/{tag}",
     )
     release = identity(tag, public_commit)
-    hashes = pypi_files(release, wait=True)
+    hashes = all_pypi_files(release, wait=True)
     if hashes is None:
         return {
             "status": "SKIP",
@@ -462,12 +519,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "build":
             outputs["built"] = str(build(release, args.dist)).lower()
         elif args.command == "pending-dist":
-            result["pending"] = pending_dist(release, args.dist, args.output)
-            outputs["pending"] = str(bool(result["pending"])).lower()
+            selected = pending_dist(release, args.dist, args.output)
+            result["pending"] = selected
+            outputs["pending"] = str(any(selected.values())).lower()
+            for package in DISTRIBUTIONS:
+                outputs[f"pending_{archive(package)}"] = str(bool(selected[package])).lower()
         elif args.command != "gate":
             if github_tag(args.tag) != release["commit"]:
                 raise ReleaseError("GitHub tag identity conflict")
-            hashes = pypi_files(release, wait=args.command in ("record", "verify"))
+            hashes = all_pypi_files(release, wait=args.command in ("record", "verify"))
             result["package_verification"] = "MISSING" if hashes is None else "PASS"
             result["files"] = hashes
             if args.command in ("record", "verify"):
