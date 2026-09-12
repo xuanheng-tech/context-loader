@@ -292,7 +292,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
     """Render all sections in fixed order without exceeding the global byte limit."""
     header = "\n".join(
         (
-            "# Codex Project Context",
+            "# Project Context",
             "",
             f"- Schema: `{SCHEMA}`",
             f"- Repository: `{_display(os.fspath(state.repository))}`",

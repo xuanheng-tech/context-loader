@@ -32,15 +32,13 @@ except ModuleNotFoundError:
     from changelog import extract_tag
 
 PUBLIC_REPOSITORY = "xuanheng-tech/context-loader"
-# 0.1.8 splits the published identity: the canonical distribution carries the runtime
-# and the console script, and the legacy name stays as a shim that depends on it.
 PACKAGE = "context-loader"
-COMPAT_PACKAGE = "codex-project-context-loader"
-DISTRIBUTIONS = (PACKAGE, COMPAT_PACKAGE)
-COMPAT_ROOT = f"compat/{COMPAT_PACKAGE}"
-# The split starts at 0.1.8. Every earlier tag shipped one distribution under the
-# legacy name, so those releases are verified against the model that existed then
-# and are never expected to have a canonical counterpart.
+DISTRIBUTIONS = (PACKAGE,)
+# Factual provenance for the already-published 0.x artifacts only. These names never
+# become an entrypoint, module or distribution of a new neutral release.
+HISTORICAL_PACKAGE = "codex-project-context-loader"
+HISTORICAL_COMPAT_ROOT = f"compat/{HISTORICAL_PACKAGE}"
+HISTORICAL_DISTRIBUTIONS = (PACKAGE, HISTORICAL_PACKAGE)
 DUAL_DISTRIBUTION_VERSION = (0, 1, 8)
 
 
@@ -49,16 +47,20 @@ def archive(package: str) -> str:
 
 
 def is_dual(version: str) -> bool:
-    return tuple(int(part) for part in version.split(".")) >= DUAL_DISTRIBUTION_VERSION
+    return tuple(int(part) for part in version.split(".")) == DUAL_DISTRIBUTION_VERSION
 
 
 def canonical_package(version: str) -> str:
     """The distribution that carries the runtime for this release."""
-    return PACKAGE if is_dual(version) else COMPAT_PACKAGE
+    return (
+        PACKAGE
+        if tuple(int(part) for part in version.split(".")) >= DUAL_DISTRIBUTION_VERSION
+        else HISTORICAL_PACKAGE
+    )
 
 
 def distributions(version: str) -> tuple[str, ...]:
-    return DISTRIBUTIONS if is_dual(version) else (COMPAT_PACKAGE,)
+    return HISTORICAL_DISTRIBUTIONS if is_dual(version) else (canonical_package(version),)
 
 
 GITHUB_API = "https://api.github.com"
@@ -105,9 +107,11 @@ def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = Fals
     if re.search(rf'^__version__ = "{re.escape(version)}"$', package, re.MULTILINE) is None:
         raise ReleaseError("package version declarations disagree")
     if is_dual(version):
-        compat = tomllib.loads(command("git", "show", f"{commit}:{COMPAT_ROOT}/pyproject.toml"))
+        compat = tomllib.loads(
+            command("git", "show", f"{commit}:{HISTORICAL_COMPAT_ROOT}/pyproject.toml")
+        )
         if (
-            compat["project"]["name"] != COMPAT_PACKAGE
+            compat["project"]["name"] != HISTORICAL_PACKAGE
             or compat["project"]["version"] != version
             or compat["project"].get("dependencies") != [f"{PACKAGE}=={version}"]
             or "scripts" in compat["project"]
@@ -260,7 +264,7 @@ def check_artifact(name: str, raw: bytes, version: str, package: str = PACKAGE) 
     parsed = BytesParser().parsebytes(metadata)
     if parsed["Name"] != package or parsed["Version"] != version:
         raise ReleaseError("package artifact identity mismatch")
-    if package == COMPAT_PACKAGE and is_dual(version):
+    if package == HISTORICAL_PACKAGE and is_dual(version):
         required = f"{PACKAGE}=={version}"
         if [value.strip() for value in parsed.get_all("Requires-Dist") or []] != [required]:
             raise ReleaseError("compatibility distribution must depend only on the canonical pin")
@@ -344,7 +348,7 @@ def pypi_files(
 def all_pypi_files(
     release: dict, *, complete: bool = True, wait: bool = False
 ) -> dict[str, str] | None:
-    """Merge both distributions' verified files, or None while any is unpublished."""
+    """Merge the release's declared distribution files, or None while any is unpublished."""
     merged: dict[str, str] = {}
     for package in distributions(release["version"]):
         hashes = pypi_files(release, package=package, complete=complete, wait=wait)
@@ -374,7 +378,7 @@ def build(release: dict, dist: Path) -> bool:
     # directory; their archive names never collide.
     command("uv", "build", "--out-dir", os.fspath(dist))
     if is_dual(release["version"]):
-        command("uv", "build", "--project", COMPAT_ROOT, "--out-dir", os.fspath(dist))
+        command("uv", "build", "--project", HISTORICAL_COMPAT_ROOT, "--out-dir", os.fspath(dist))
     produced = dist_artifacts(dist)
     if set(produced) != all_filenames(release["version"]):
         raise ReleaseError("build produced an unexpected artifact set")
@@ -387,7 +391,9 @@ def pending_dist(release: dict, source: Path, output: Path) -> dict[str, list[st
     if set(paths) != all_filenames(release["version"]) or any(
         not p.is_file() or p.is_symlink() for p in paths.values()
     ):
-        raise ReleaseError("expected the original wheel and sdist of both distributions only")
+        raise ReleaseError(
+            "expected the original wheel and sdist of every declared distribution only"
+        )
     pending: dict[str, list[str]] = {}
     for package in distributions(release["version"]):
         existing = pypi_files(release, package=package, complete=False) or {}

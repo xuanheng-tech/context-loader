@@ -11,7 +11,7 @@ from context_loader.git import RecentCommit, RepositoryState
 from context_loader.render import render_markdown
 
 
-def test_markdown_renderer_matches_0_1_1_golden() -> None:
+def test_markdown_renderer_matches_1_0_0_golden() -> None:
     state = RepositoryState(
         repository=Path("/workspace/demo"),
         branch="main",
@@ -36,6 +36,6 @@ def test_markdown_renderer_matches_0_1_1_golden() -> None:
             (TreeEntry(".git", "directory"), TreeEntry("README.md", "file"))
         ),
     )
-    fixture = Path(__file__).with_name("fixtures") / "markdown_0_1_1.md"
+    fixture = Path(__file__).with_name("fixtures") / "markdown_1_0_0.md"
 
     assert render_markdown(state, project) == fixture.read_bytes()

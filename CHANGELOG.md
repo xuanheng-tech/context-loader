@@ -19,6 +19,15 @@ dates.
   instead of failing the closure. Only rate limiting is retried; a permission
   refusal or any other status still stops immediately.
 
+## 1.0.0
+
+- Rename the sole CLI and development entrypoint to `project-context`, and use the
+  provider-neutral `Project Context` Markdown heading (public CLI contract 2).
+- Publish only `context-loader`; retire the compatibility distribution from new
+  builds while retaining verification of factual historical package identities.
+- Preserve the existing read-only Git, environment isolation, JSON schema and
+  release provenance checks.
+
 ## 0.1.8
 
 - Fixed: release closure polls the PyPI index and integrity endpoints for a bounded period, so

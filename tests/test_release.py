@@ -34,15 +34,7 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo / "pyproject.toml").write_text(f'[project]\nname = "{r.PACKAGE}"\nversion = "1.2.3"\n')
     (repo / "context_loader/__init__.py").write_text('__version__ = "1.2.3"\n')
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n## 1.2.3\n\n- Notes\n")
-    compat = repo / r.COMPAT_ROOT
-    compat.mkdir(parents=True)
-    (compat / "pyproject.toml").write_text(
-        f'[project]\nname = "{r.COMPAT_PACKAGE}"\nversion = "1.2.3"\n'
-        f'dependencies = ["{r.PACKAGE}==1.2.3"]\n'
-    )
-    subprocess.run(
-        ["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md", "compat"], check=True
-    )
+    subprocess.run(["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md"], check=True)
     subprocess.run(
         [
             "git",
@@ -320,7 +312,7 @@ def historical_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
     subprocess.run(["git", "init", "-q", "-b", "main"], check=True)
     (repo / "context_loader").mkdir()
     (repo / "pyproject.toml").write_text(
-        f'[project]\nname = "{r.COMPAT_PACKAGE}"\nversion = "0.1.5"\n'
+        f'[project]\nname = "{r.HISTORICAL_PACKAGE}"\nversion = "0.1.5"\n'
     )
     (repo / "context_loader/__init__.py").write_text('__version__ = "0.1.5"\n')
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n## 0.1.5\n\n- Notes\n")
@@ -329,15 +321,15 @@ def historical_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
 
 
 def test_distribution_model_is_selected_by_release_version() -> None:
-    assert r.distributions("0.1.5") == (r.COMPAT_PACKAGE,)
-    assert r.distributions("0.1.7") == (r.COMPAT_PACKAGE,)
-    assert r.distributions("0.1.8") == r.DISTRIBUTIONS
+    assert r.distributions("0.1.5") == (r.HISTORICAL_PACKAGE,)
+    assert r.distributions("0.1.7") == (r.HISTORICAL_PACKAGE,)
+    assert r.distributions("0.1.8") == r.HISTORICAL_DISTRIBUTIONS
     assert r.distributions("0.2.0") == r.DISTRIBUTIONS
-    assert r.canonical_package("0.1.5") == r.COMPAT_PACKAGE
+    assert r.canonical_package("0.1.5") == r.HISTORICAL_PACKAGE
     assert r.canonical_package("0.1.8") == r.PACKAGE
-    assert r.all_filenames("0.1.5") == r.filenames("0.1.5", r.COMPAT_PACKAGE)
+    assert r.all_filenames("0.1.5") == r.filenames("0.1.5", r.HISTORICAL_PACKAGE)
     assert r.all_filenames("0.1.8") == r.filenames("0.1.8", r.PACKAGE) | r.filenames(
-        "0.1.8", r.COMPAT_PACKAGE
+        "0.1.8", r.HISTORICAL_PACKAGE
     )
 
 
@@ -351,32 +343,32 @@ def test_historical_release_verifies_against_its_own_single_distribution(
 
     def pypi_files(rel, *, package=None, complete=True, wait=False):
         requested.append(package or r.canonical_package(rel["version"]))
-        return {name: "0" * 64 for name in r.filenames("0.1.5", r.COMPAT_PACKAGE)}
+        return {name: "0" * 64 for name in r.filenames("0.1.5", r.HISTORICAL_PACKAGE)}
 
     monkeypatch.setattr(r, "pypi_files", pypi_files)
     hashes = r.all_pypi_files(release)
 
     # The canonical project has no historical version and must never be requested.
-    assert requested == [r.COMPAT_PACKAGE]
-    assert set(hashes) == r.filenames("0.1.5", r.COMPAT_PACKAGE)
+    assert requested == [r.HISTORICAL_PACKAGE]
+    assert set(hashes) == r.filenames("0.1.5", r.HISTORICAL_PACKAGE)
 
 
 def test_historical_compat_artifact_is_not_required_to_pin_a_canonical_release() -> None:
-    metadata = f"Name: {r.COMPAT_PACKAGE}\nVersion: 0.1.5\n".encode()
+    metadata = f"Name: {r.HISTORICAL_PACKAGE}\nVersion: 0.1.5\n".encode()
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as archive:
-        archive.writestr(f"{r.archive(r.COMPAT_PACKAGE)}-0.1.5.dist-info/METADATA", metadata)
+        archive.writestr(f"{r.archive(r.HISTORICAL_PACKAGE)}-0.1.5.dist-info/METADATA", metadata)
 
     r.check_artifact(
-        f"{r.archive(r.COMPAT_PACKAGE)}-0.1.5-py3-none-any.whl",
+        f"{r.archive(r.HISTORICAL_PACKAGE)}-0.1.5-py3-none-any.whl",
         raw.getvalue(),
         "0.1.5",
-        r.COMPAT_PACKAGE,
+        r.HISTORICAL_PACKAGE,
     )
 
 
 def _retag(repo: Path, version: str) -> None:
-    """Move the whole fixture to a new dual-model version and tag it."""
+    """Create another tagged fixture without changing an existing tag."""
     (repo / "pyproject.toml").write_text(
         f'[project]\nname = "{r.PACKAGE}"\nversion = "{version}"\n'
     )
@@ -388,38 +380,36 @@ def _retag(repo: Path, version: str) -> None:
 def test_dual_release_requires_the_compatibility_project(repository: Path) -> None:
     assert r.identity(TAG)["version"] == "1.2.3"
 
-    subprocess.run(["git", "rm", "-rq", r.COMPAT_ROOT], check=True)
-    _retag(repository, "1.2.4")
+    _retag(repository, "0.1.8")
 
     with pytest.raises(r.ReleaseError):
-        r.identity("v1.2.4")
+        r.identity("v0.1.8")
 
 
-def test_dual_release_rejects_a_compatibility_project_pinning_another_version(
-    repository: Path,
-) -> None:
-    (repository / r.COMPAT_ROOT / "pyproject.toml").write_text(
-        f'[project]\nname = "{r.COMPAT_PACKAGE}"\nversion = "1.2.4"\n'
-        f'dependencies = ["{r.PACKAGE}==1.2.3"]\n'
+def test_historical_dual_release_rejects_a_wrong_pin(repository: Path) -> None:
+    compat = repository / r.HISTORICAL_COMPAT_ROOT
+    compat.mkdir(parents=True)
+    (compat / "pyproject.toml").write_text(
+        f'[project]\nname = "{r.HISTORICAL_PACKAGE}"\nversion = "0.1.8"\n'
+        f'dependencies = ["{r.PACKAGE}==0.1.7"]\n'
     )
-    _retag(repository, "1.2.4")
-
+    _retag(repository, "0.1.8")
     with pytest.raises(r.ReleaseError, match="does not pin this canonical release"):
-        r.identity("v1.2.4")
+        r.identity("v0.1.8")
 
 
 def test_dual_compat_artifact_without_the_canonical_pin_fails_closed() -> None:
-    metadata = f"Name: {r.COMPAT_PACKAGE}\nVersion: 1.2.3\n".encode()
+    metadata = f"Name: {r.HISTORICAL_PACKAGE}\nVersion: 0.1.8\n".encode()
     raw = io.BytesIO()
     with zipfile.ZipFile(raw, "w") as archive:
-        archive.writestr(f"{r.archive(r.COMPAT_PACKAGE)}-1.2.3.dist-info/METADATA", metadata)
+        archive.writestr(f"{r.archive(r.HISTORICAL_PACKAGE)}-0.1.8.dist-info/METADATA", metadata)
 
     with pytest.raises(r.ReleaseError, match="must depend only on the canonical pin"):
         r.check_artifact(
-            f"{r.archive(r.COMPAT_PACKAGE)}-1.2.3-py3-none-any.whl",
+            f"{r.archive(r.HISTORICAL_PACKAGE)}-0.1.8-py3-none-any.whl",
             raw.getvalue(),
-            "1.2.3",
-            r.COMPAT_PACKAGE,
+            "0.1.8",
+            r.HISTORICAL_PACKAGE,
         )
 
 
@@ -431,7 +421,9 @@ def test_dual_release_missing_one_distribution_fails_closed(
     (source / f"{r.archive(r.PACKAGE)}-1.2.3.tar.gz").unlink()
     monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {})
 
-    with pytest.raises(r.ReleaseError, match="original wheel and sdist of both distributions"):
+    with pytest.raises(
+        r.ReleaseError, match="original wheel and sdist of every declared distribution"
+    ):
         r.pending_dist(RELEASE, source, tmp_path / "pending")
 
     assert not (tmp_path / "pending").exists()
@@ -597,7 +589,7 @@ def artifacts(path: Path) -> dict[str, str]:
     for package in r.DISTRIBUTIONS:
         stem = r.archive(package)
         fields = f"Name: {package}\nVersion: 1.2.3\n"
-        if package == r.COMPAT_PACKAGE:
+        if package == r.HISTORICAL_PACKAGE:
             fields += f"Requires-Dist: {r.PACKAGE}==1.2.3\n"
         metadata = fields.encode()
         with zipfile.ZipFile(path / f"{stem}-1.2.3-py3-none-any.whl", "w") as archive:
@@ -622,7 +614,6 @@ def test_partial_upload_reuses_only_missing_original_file(tmp_path: Path, monkey
     pending = r.pending_dist(RELEASE, source, output)
 
     assert pending[r.PACKAGE] == [f"{r.archive(r.PACKAGE)}-1.2.3.tar.gz"]
-    assert pending[r.COMPAT_PACKAGE] == sorted(r.filenames("1.2.3", r.COMPAT_PACKAGE))
     assert {p.name for p in output.iterdir()} == set(r.DISTRIBUTIONS)
     for package, names in pending.items():
         assert {p.name for p in (output / package).iterdir()} == set(names)
@@ -632,7 +623,6 @@ def test_partial_upload_reuses_only_missing_original_file(tmp_path: Path, monkey
     monkeypatch.setattr(r, "pypi_files", lambda *_, **__: hashes)
     assert r.pending_dist(RELEASE, source, tmp_path / "retry") == {
         r.PACKAGE: [],
-        r.COMPAT_PACKAGE: [],
     }
 
 

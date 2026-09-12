@@ -20,16 +20,16 @@ pip install context-loader
 ```
 
 ```bash
-codex-project-context --repo /path/to/repo
+project-context --repo /path/to/repo
 ```
 
 ```bash
-codex-project-context --repo /path/to/repo --format json
+project-context --repo /path/to/repo --format json
 ```
 
 ## Install
 
-Public stable release on PyPI: `0.1.8`.
+Source version: `1.0.0`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
@@ -43,25 +43,24 @@ Install via `pip`:
 pip install context-loader
 ```
 
-For development or source-based installs tracking current repository (`0.1.8`):
+For development or source-based installs tracking current repository (`1.0.0`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
 ```
 
-The repository also retains `./codex-project-context` as a direct development entry point.
+The repository also retains `./project-context` as a direct development entry point.
 
 ### Distributions
 
-From `0.1.8` the canonical PyPI distribution is **`context-loader`**. It carries the
-`context_loader` runtime and installs the `codex-project-context` console script; the CLI name,
-the JSON schema version and the public contract are unchanged by the rename.
+The sole distribution is **`context-loader`**, containing the `context_loader` runtime
+and the `project-context` console script. Version `1.0.0` breaks the CLI name and Markdown
+heading contract. The JSON schema is unchanged. Terminal and any executor call this same
+entry point with explicit repository and focus arguments; no provider adapter or private
+session state is involved.
 
-**`codex-project-context-loader`** remains published as a compatibility distribution. From
-`0.1.8` it contains no runtime and no console script and only depends on `context-loader==0.1.8`,
-so installing either name yields exactly one implementation and one CLI. Existing pins keep
-working, and releases `0.1.5`-`0.1.7` of the old name are unchanged. New integrations should
-depend on `context-loader`.
+Previously published packages and historical release records remain unchanged. The new
+release publishes no compatibility distribution or legacy executable alias.
 
 The wheel installs the runtime package only. The source distribution additionally carries
 `tool_cli_contract.json`, so a package-only consumer can pin the declared public CLI contract
@@ -91,11 +90,11 @@ automatic redaction**. Inspect the output before sharing it with a person or ext
 ## Usage
 
 ```bash
-codex-project-context --version
-codex-project-context --repo /home/user/projects/example
-codex-project-context --repo /home/user/projects/example --format markdown
-codex-project-context --repo /home/user/projects/example --format json
-codex-project-context --repo /home/user/projects/example \
+project-context --version
+project-context --repo /home/user/projects/example
+project-context --repo /home/user/projects/example --format markdown
+project-context --repo /home/user/projects/example --format json
+project-context --repo /home/user/projects/example \
   --focus "Authentication and session management" \
   --path auth/session.py
 ```

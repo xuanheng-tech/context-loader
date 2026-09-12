@@ -16,10 +16,10 @@ def test_public_cli_contract_is_consistent() -> None:
         project = tomllib.load(stream)["project"]
 
     assert contract["schema_version"] == 1
-    assert contract["contract_version"] == 1
+    assert contract["contract_version"] == 2
     assert contract["tool_name"] == "context-loader"
     assert contract["tool_version"] == project["version"]
-    assert {command["name"] for command in contract["commands"]} == {"codex-project-context"}
+    assert {command["name"] for command in contract["commands"]} == {"project-context"}
     declared_flags = set(contract["commands"][0]["flags"])
     assert declared_flags == {
         "--repo",

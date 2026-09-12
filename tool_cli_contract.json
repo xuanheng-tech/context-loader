@@ -9,7 +9,7 @@
         "--version",
         "--help"
       ],
-      "name": "codex-project-context",
+      "name": "project-context",
       "operation_class": "read_only",
       "preconditions": [
         "repo_is_absolute_git_worktree",
@@ -24,7 +24,7 @@
       ]
     }
   ],
-  "contract_version": 1,
+  "contract_version": 2,
   "flags": {
     "format": [
       "markdown",
@@ -44,5 +44,5 @@
   ],
   "schema_version": 1,
   "tool_name": "context-loader",
-  "tool_version": "0.1.8"
+  "tool_version": "1.0.0"
 }

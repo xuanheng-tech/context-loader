@@ -4,15 +4,15 @@ build-backend = "uv_build"
 
 [project]
 name = "context-loader"
-version = "0.1.8"
-description = "Render deterministic local Git context for Codex"
+version = "1.0.0"
+description = "Render deterministic local Git context for any executor"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
 [project.scripts]
-codex-project-context = "context_loader.cli:main"
+project-context = "context_loader.cli:main"
 
 [project.urls]
 Repository = "https://github.com/xuanheng-tech/context-loader"

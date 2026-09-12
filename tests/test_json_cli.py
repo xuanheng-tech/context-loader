@@ -11,7 +11,7 @@ import pytest
 from context_loader.application import source_scope_for_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CLI = PROJECT_ROOT / "codex-project-context"
+CLI = PROJECT_ROOT / "project-context"
 GIT = "/usr/bin/git"
 CONTROLLED_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -52,9 +52,9 @@ def _repository(tmp_path: Path) -> Path:
     _git(
         repo,
         "-c",
-        "user.name=Codex Test",
+        "user.name=Context Test",
         "-c",
-        "user.email=codex-test@example.invalid",
+        "user.email=context-test@example.invalid",
         "-c",
         "commit.gpgsign=false",
         "commit",
@@ -134,7 +134,7 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
     assert result.stderr == b""
     document = json.loads(result.stdout)
     assert document["schema_version"] == 1
-    assert document["tool"] == {"name": "context-loader", "version": "0.1.8"}
+    assert document["tool"] == {"name": "context-loader", "version": "1.0.0"}
     assert document["repository"] == {
         "requested_path": os.fspath(repo.resolve()),
         "canonical_root": os.fspath(repo.resolve()),
@@ -224,7 +224,7 @@ def test_markdown_default_and_explicit_format_are_byte_identical(tmp_path: Path)
     assert default.returncode == explicit.returncode == machine.returncode == 0
     assert default.stderr == explicit.stderr == machine.stderr == b""
     assert default.stdout == explicit.stdout
-    assert default.stdout.startswith(b"# Codex Project Context\n")
+    assert default.stdout.startswith(b"# Project Context\n")
     assert json.loads(machine.stdout)["context"].encode() == default.stdout
 
 

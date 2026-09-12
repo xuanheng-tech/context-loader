@@ -1,4 +1,4 @@
-"""Command-line interface for deterministic Codex project context."""
+"""Command-line interface for deterministic project context."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class SafeArgumentParser(argparse.ArgumentParser):
 
 def _parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(
-        prog="codex-project-context",
+        prog="project-context",
         description="Render deterministic local Git context as Markdown or JSON.",
         allow_abbrev=False,
     )

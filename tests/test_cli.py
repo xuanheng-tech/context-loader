@@ -14,7 +14,7 @@ from context_loader import __version__
 from context_loader.cli import main
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CLI = PROJECT_ROOT / "codex-project-context"
+CLI = PROJECT_ROOT / "project-context"
 GIT = "/usr/bin/git"
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -57,9 +57,9 @@ def _repository(tmp_path: Path, *, commit: bool = True) -> Path:
         _git(
             repo,
             "-c",
-            "user.name=Codex Test",
+            "user.name=Context Test",
             "-c",
-            "user.email=codex-test@example.invalid",
+            "user.email=context-test@example.invalid",
             "-c",
             "commit.gpgsign=false",
             "commit",
@@ -132,16 +132,16 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     lock_package = next(
         package for package in lock["package"] if package["name"] == "context-loader"
     )
-    entry_point = project["project"]["scripts"]["codex-project-context"]
+    entry_point = project["project"]["scripts"]["project-context"]
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"codex-project-context 0.1.8\n"
+    assert result.stdout == b"project-context 1.0.0\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "0.1.8"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.0.0"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
-    assert (PROJECT_ROOT / "codex-project-context").read_text(encoding="utf-8") == (
+    assert (PROJECT_ROOT / "project-context").read_text(encoding="utf-8") == (
         "#!/usr/bin/env python3\nfrom context_loader.cli import main\nraise SystemExit(main())\n"
     )
 
@@ -155,7 +155,7 @@ def test_clean_repository_and_missing_upstream(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert result.stderr == b""
     output = result.stdout.decode("utf-8")
-    assert output.startswith("# Codex Project Context\n\n")
+    assert output.startswith("# Project Context\n\n")
     assert "- Schema: `context-loader/v0.1`\n" in output
     assert f"- Repository: `{repo.resolve()}`\n" in output
     assert "- Branch: `main`\n" in output
@@ -395,9 +395,9 @@ def test_pushed_upstream_is_resolved_and_local_ahead_is_counted(tmp_path: Path) 
     _git(
         repo,
         "-c",
-        "user.name=Codex Test",
+        "user.name=Context Test",
         "-c",
-        "user.email=codex-test@example.invalid",
+        "user.email=context-test@example.invalid",
         "-c",
         "commit.gpgsign=false",
         "commit",
@@ -507,9 +507,9 @@ def test_recent_commits_are_limited_to_eight(tmp_path: Path) -> None:
         _git(
             repo,
             "-c",
-            "user.name=Codex Test",
+            "user.name=Context Test",
             "-c",
-            "user.email=codex-test@example.invalid",
+            "user.email=context-test@example.invalid",
             "-c",
             "commit.gpgsign=false",
             "commit",
@@ -552,7 +552,7 @@ build mode="debug":
 _internal:
 [private]
 secret:
-codex-project-context *args:
+project-context *args:
     echo ignored
 """,
         encoding="utf-8",
@@ -593,8 +593,8 @@ codex-project-context *args:
         "- `gui` → `pkg:gui`",
         "- `zeta` → `pkg:zeta`",
         "- `just build`",
-        "- `just codex-project-context`",
         "- `just default`",
+        "- `just project-context`",
         "- `npm run alpha` → `node a.js`",
         "- `npm run zeta` → `node z.js`",
         "- `make all`",
@@ -732,9 +732,9 @@ def test_global_output_limit_omits_late_sections_without_invalid_utf8(tmp_path: 
     _git(
         repo,
         "-c",
-        "user.name=Codex Test",
+        "user.name=Context Test",
         "-c",
-        "user.email=codex-test@example.invalid",
+        "user.email=context-test@example.invalid",
         "-c",
         "commit.gpgsign=false",
         "commit",

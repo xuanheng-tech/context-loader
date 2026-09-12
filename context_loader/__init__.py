@@ -1,3 +1,3 @@
-"""Codex Project Context Loader."""
+"""Project Context Loader."""
 
-__version__ = "0.1.8"
+__version__ = "1.0.0"

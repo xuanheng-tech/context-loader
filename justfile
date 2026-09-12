@@ -4,9 +4,9 @@ default:
     just --list
 
 # Render deterministic context for one absolute Git worktree path
-codex-project-context *args:
+project-context *args:
     #!/usr/bin/env bash
-    exec ./codex-project-context "$@"
+    exec ./project-context "$@"
 
 test:
     uv run --frozen pytest
