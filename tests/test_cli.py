@@ -952,3 +952,125 @@ def test_directory_tree_renders_linked_worktree_git_file(tmp_path: Path) -> None
     lines = body.splitlines()
     assert ".git" in lines
     assert ".git/" not in lines
+
+
+def test_oversized_git_output_terminates_process_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path)
+    monkeypatch.setattr("context_loader.git.MAX_GIT_OUTPUT_BYTES", 20)
+    exit_code = main(["--repo", os.fspath(repo)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "error: repository Git output exceeded the safety limit\n" in captured.err
+
+
+def test_oversized_repository_file_stat_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path)
+    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 1024)
+    (repo / "README.md").write_text("A" * 2048, encoding="utf-8")
+
+    exit_code = main(["--repo", os.fspath(repo)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "Source: `README.md`\n\nSkipped: unreadable." in captured.out
+
+
+def test_oversized_repository_file_stream_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from context_loader.collect import SKIPPED_UNREADABLE, _read_validated_text
+
+    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 100)
+    test_file = tmp_path / "stream_test.txt"
+    test_file.write_text("x" * 500, encoding="utf-8")
+    with test_file.open("rb") as stream:
+        content, truncated, status, chars = _read_validated_text(stream.fileno(), 16 * 1024)
+
+    assert status == SKIPPED_UNREADABLE
+    assert content == ""
+    assert truncated is False
+    assert chars == 0
+
+
+def test_oversized_repository_file_in_json_is_omitted_from_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path)
+    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 512)
+    (repo / "AGENTS.md").write_text("# Instructions\n" + ("x" * 1024), encoding="utf-8")
+
+    exit_code = main(["--repo", os.fspath(repo), "--format", "json"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    document = json.loads(captured.out)
+    assert document["tool"]["name"] == "context-loader"
+    assert document["tool"]["version"] == "1.0.0"
+    assert not any(source["kind"] == "agents" for source in document["sources"])
+    assert "Skipped: unreadable." in document["context"]
+
+
+def test_utf8_nul_and_symlink_regressions(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_bytes(b"invalid \xff\xfe utf8\n")
+    (repo / "AGENTS.md").write_bytes(b"# Title\n\0null byte\n")
+    outside = tmp_path / "outside.toml"
+    outside.write_text('[project]\nname = "outside"\n', encoding="utf-8")
+    (repo / "pyproject.toml").symlink_to(outside)
+
+    result = _run(repo)
+    assert result.returncode == 0
+    output = result.stdout.decode("utf-8")
+    assert "Source: `README.md`\n\nSkipped: unsupported text encoding." in output
+    assert "Source: `AGENTS.md`\n\nSkipped: unsupported text encoding." in output
+    assert "### `pyproject.toml`\n\nSkipped: symlink." in output
+
+
+def test_normal_output_determinism_across_runs(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Development\nDeterminism rule.\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Demo Project\nDeterministic context.\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\n[project.scripts]\ncli = "pkg:cli"\n', encoding="utf-8"
+    )
+
+    result1 = _run(repo)
+    result2 = _run(repo)
+    assert result1.returncode == 0
+    assert result2.returncode == 0
+    assert result1.stdout == result2.stdout
+    assert result1.stderr == result2.stderr == b""
+
+    json1 = subprocess.run(
+        [os.fspath(CLI), "--repo", os.fspath(repo), "--format", "json"],
+        cwd="/",
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    json2 = subprocess.run(
+        [os.fspath(CLI), "--repo", os.fspath(repo), "--format", "json"],
+        cwd="/",
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert json1.returncode == 0
+    assert json2.returncode == 0
+    assert json1.stdout == json2.stdout

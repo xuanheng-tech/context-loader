@@ -26,6 +26,8 @@ DECLARED_COMMANDS_LIMIT_BYTES = 8 * 1024
 DIRECTORY_TREE_LIMIT_BYTES = 12 * 1024
 DIRECTORY_TREE_MAX_ITEMS = 300
 DIRECTORY_TREE_MAX_DEPTH = 2
+FILE_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
+MAX_FILE_SCAN_BYTES = FILE_SCAN_LIMIT_BYTES
 TRUNCATION_MARKER = "… truncated by context-loader …"
 
 NOT_PRESENT = "Not present."
@@ -705,11 +707,15 @@ def _read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, s
             source_characters += 1
             append(character)
 
+    total_bytes_read = 0
     try:
         while True:
             raw = os.read(file_descriptor, 64 * 1024)
             if not raw:
                 break
+            total_bytes_read += len(raw)
+            if total_bytes_read > FILE_SCAN_LIMIT_BYTES:
+                return "", False, SKIPPED_UNREADABLE, 0
             if b"\0" in raw:
                 return "", False, SKIPPED_ENCODING, 0
             consume(decoder.decode(raw, final=False))
@@ -743,6 +749,8 @@ def _collect_root_file(root: Path, name: str, language: str, limit: int) -> Coll
         return CollectedFile(name, language, SKIPPED_SYMLINK)
     if not stat.S_ISREG(metadata.st_mode):
         return CollectedFile(name, language, SKIPPED_NOT_REGULAR)
+    if metadata.st_size > FILE_SCAN_LIMIT_BYTES:
+        return CollectedFile(name, language, SKIPPED_UNREADABLE)
 
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -752,8 +760,11 @@ def _collect_root_file(root: Path, name: str, language: str, limit: int) -> Coll
             return CollectedFile(name, language, SKIPPED_SYMLINK)
         return CollectedFile(name, language, SKIPPED_UNREADABLE)
     try:
-        if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+        stat_result = os.fstat(file_descriptor)
+        if not stat.S_ISREG(stat_result.st_mode):
             return CollectedFile(name, language, SKIPPED_NOT_REGULAR)
+        if stat_result.st_size > FILE_SCAN_LIMIT_BYTES:
+            return CollectedFile(name, language, SKIPPED_UNREADABLE)
         content, truncated, error_status, source_characters = _read_validated_text(
             file_descriptor, limit
         )

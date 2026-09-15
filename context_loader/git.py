@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import selectors
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -108,25 +110,81 @@ class RepositoryLocation:
     canonical_root: Path
 
 
+def _read_bounded_process_stdout(
+    proc: subprocess.Popen[bytes],
+    max_bytes: int,
+    timeout_seconds: float,
+) -> bytes:
+    deadline = time.monotonic() + timeout_seconds
+    buffer = bytearray()
+    assert proc.stdout is not None
+    os.set_blocking(proc.stdout.fileno(), False)
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.wait()
+                raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
+            events = selector.select(timeout=max(0.0, remaining))
+            if not events:
+                proc.kill()
+                proc.wait()
+                raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
+            try:
+                chunk = os.read(proc.stdout.fileno(), 64 * 1024)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            buffer.extend(chunk)
+            if len(buffer) > max_bytes:
+                proc.kill()
+                proc.wait()
+                raise ContextLoaderError("repository Git output exceeded the safety limit")
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait()
+        except OSError:
+            pass
+        raise
+    finally:
+        selector.close()
+
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        proc.wait(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    return bytes(buffer)
+
+
 def _run_git(repo: Path, arguments: tuple[str, ...], *, check: bool = True) -> GitResult:
     argv = [GIT_EXECUTABLE, *_GIT_PREFIX, "-C", os.fspath(repo), *arguments]
     try:
-        completed = subprocess.run(  # noqa: S603 - executable and every command are fixed here.
+        with subprocess.Popen(  # noqa: S603 - executable and every command are fixed here.
             argv,
             cwd="/",
             env=dict(_GIT_ENVIRONMENT),
             stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-            check=False,
-        )
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ) as proc:
+            stdout = _read_bounded_process_stdout(proc, MAX_GIT_OUTPUT_BYTES, GIT_TIMEOUT_SECONDS)
+            returncode = proc.returncode
+    except ContextLoaderError:
+        raise
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ContextLoaderError("unable to read repository Git state") from exc
-    if len(completed.stdout) > MAX_GIT_OUTPUT_BYTES:
-        raise ContextLoaderError("repository Git output exceeded the safety limit")
-    if check and completed.returncode != 0:
+
+    if check and returncode != 0:
         raise ContextLoaderError("unable to read repository Git state")
-    return GitResult(completed.stdout, completed.returncode)
+    return GitResult(stdout, returncode)
 
 
 def _without_one_line_ending(raw: bytes) -> bytes:
