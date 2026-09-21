@@ -29,7 +29,7 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.0.0`. Install its matching published release or an exact source commit.
+Source version: `1.1.0`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
@@ -43,7 +43,7 @@ Install via `pip`:
 pip install context-loader
 ```
 
-For development or source-based installs tracking current repository (`1.0.0`):
+For development or source-based installs tracking current repository (`1.1.0`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -134,7 +134,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -181,7 +181,7 @@ contain heading, heading level, and fixed selection reasons; it never contains t
 target path. Existing source fields and schema version 1 remain unchanged.
 
 The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `1.0.0`. Callers must depend only on fields declared above.
+integer `1`, while `tool.version` is `1.1.0`. Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
