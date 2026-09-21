@@ -288,8 +288,11 @@ just check
 ## Version maintenance
 
 The versions in `pyproject.toml` and `context_loader/__init__.py`, the matching `CHANGELOG.md`
-section, and required tests must change in the same release-preparation batch. `CHANGELOG.md` is the
-authoritative version-change record. Merging to `master` is not a release; formal publication
+section, required tests, and the README current-stable declaration plus `context-loader==X.Y.Z`
+install pins must change in the same release-preparation batch. `CHANGELOG.md` is the
+authoritative version-change record. `scripts/release.py` rejects README stable/install
+pins that disagree with the intended package version; historical changelog entries are
+not part of that check. Merging to `master` is not a release; formal publication
 still requires a separately created and pushed tag.
 
 ## Release closure and retries

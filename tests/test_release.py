@@ -34,7 +34,12 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo / "pyproject.toml").write_text(f'[project]\nname = "{r.PACKAGE}"\nversion = "1.2.3"\n')
     (repo / "context_loader/__init__.py").write_text('__version__ = "1.2.3"\n')
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n## 1.2.3\n\n- Notes\n")
-    subprocess.run(["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md"], check=True)
+    (repo / "README.md").write_text(
+        "Current stable release: **1.2.3**.\n\npip install 'context-loader==1.2.3'\n"
+    )
+    subprocess.run(
+        ["git", "add", "pyproject.toml", "context_loader", "CHANGELOG.md", "README.md"], check=True
+    )
     subprocess.run(
         [
             "git",
@@ -316,6 +321,9 @@ def historical_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
     )
     (repo / "context_loader/__init__.py").write_text('__version__ = "0.1.5"\n')
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n\n## 0.1.5\n\n- Notes\n")
+    (repo / "README.md").write_text(
+        f"Current stable release: **0.1.5**.\n\npip install '{r.HISTORICAL_PACKAGE}==0.1.5'\n"
+    )
     _commit_fixture(repo, HISTORICAL_TAG)
     return repo
 
@@ -374,6 +382,10 @@ def _retag(repo: Path, version: str) -> None:
     )
     (repo / "context_loader/__init__.py").write_text(f'__version__ = "{version}"\n')
     (repo / "CHANGELOG.md").write_text(f"# Changelog\n\n## Unreleased\n\n## {version}\n\n- Notes\n")
+    package = r.canonical_package(version)
+    (repo / "README.md").write_text(
+        f"Current stable release: **{version}**.\n\npip install '{package}=={version}'\n"
+    )
     _commit_fixture(repo, f"v{version}")
 
 
@@ -764,3 +776,50 @@ def test_gitea_backfill_preserves_tag_object_and_does_not_build(
     assert [a for a in actions if a[1] == "push"] == [
         ("git", "push", "--no-follow-tags", "origin", f"refs/tags/{TAG}:refs/tags/{TAG}")
     ]
+
+
+def test_check_readme_version_accepts_matching_stable_and_pins() -> None:
+    readme = (
+        "Current stable release: **1.2.3**.\n\n"
+        "pip install 'context-loader==1.2.3'\n"
+        "Older note about 1.0.0 remains historical prose.\n"
+    )
+    r.check_readme_version(readme, "1.2.3")
+
+
+def test_check_readme_version_rejects_stable_mismatch() -> None:
+    readme = "Current stable release: **1.2.0**.\n\npip install 'context-loader==1.2.3'\n"
+    with pytest.raises(r.ReleaseError, match="current stable release"):
+        r.check_readme_version(readme, "1.2.3")
+
+
+def test_check_readme_version_rejects_install_pin_mismatch() -> None:
+    readme = "Current stable release: **1.2.3**.\n\npip install 'context-loader==1.2.0'\n"
+    with pytest.raises(r.ReleaseError, match="install version pin"):
+        r.check_readme_version(readme, "1.2.3")
+
+
+def test_identity_rejects_readme_install_pin_mismatch(repository: Path) -> None:
+    (repository / "README.md").write_text(
+        "Current stable release: **1.2.3**.\n\npip install 'context-loader==1.2.0'\n"
+    )
+    subprocess.run(["git", "add", "README.md"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "stale readme pin",
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "tag", "-d", TAG], check=True)
+    subprocess.run(["git", "tag", TAG], check=True)
+    with pytest.raises(r.ReleaseError, match="install version pin"):
+        r.identity(TAG)

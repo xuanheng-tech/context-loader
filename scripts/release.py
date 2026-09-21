@@ -91,6 +91,28 @@ def command(*args: str) -> str:
     return result.stdout.strip()
 
 
+def check_readme_version(readme: str, version: str, package: str = PACKAGE) -> None:
+    """Fail when README current-stable or install pins disagree with the release version.
+
+    Only the current-stable declaration and ``package==X.Y.Z`` install pins are checked.
+    Historical changelog or prose version mentions are ignored.
+    """
+    stables = re.findall(
+        r"^Current stable release:\s*\*\*(\d+\.\d+\.\d+)\*\*",
+        readme,
+        flags=re.MULTILINE,
+    )
+    if not stables:
+        raise ReleaseError("README missing current stable release declaration")
+    if any(item != version for item in stables):
+        raise ReleaseError("README current stable release does not match package version")
+    pins = re.findall(rf"{re.escape(package)}==(\d+\.\d+\.\d+)", readme)
+    if not pins:
+        raise ReleaseError("README missing package install version pin")
+    if any(item != version for item in pins):
+        raise ReleaseError("README install version pin does not match package version")
+
+
 def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = False) -> dict:
     if TAG_RE.fullmatch(tag) is None:
         raise ReleaseError("invalid formal release tag")
@@ -117,6 +139,11 @@ def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = Fals
             or "scripts" in compat["project"]
         ):
             raise ReleaseError("compatibility distribution does not pin this canonical release")
+    check_readme_version(
+        command("git", "show", f"{commit}:README.md"),
+        version,
+        package=canonical_package(version),
+    )
     notes = extract_tag(command("git", "show", f"{commit}:CHANGELOG.md"), tag)
     return {"tag": tag, "version": version, "commit": commit, "notes": notes}
 
