@@ -8,15 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Context Loader is a local CLI that exports repository context deterministically for coding-agent workflows,
-rendering stable Markdown or JSON output.
+Current stable release: **1.1.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install context-loader
+uv tool install 'context-loader==1.1.0'
 ```
 
 ```bash
-pip install context-loader
+pip install 'context-loader==1.1.0'
 ```
 
 ```bash
@@ -34,13 +33,13 @@ Source version: `1.1.0`. Install its matching published release or an exact sour
 Install via `uv`:
 
 ```bash
-uv tool install context-loader
+uv tool install 'context-loader==1.1.0'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install context-loader
+pip install 'context-loader==1.1.0'
 ```
 
 For development or source-based installs tracking current repository (`1.1.0`):
