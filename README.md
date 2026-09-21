@@ -163,6 +163,7 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
   ],
   "context": "the same assembled Markdown context",
   "context_sha256": "sha256-hex",
+  "statuses": [],
   "warnings": []
 }
 ```
@@ -172,6 +173,8 @@ source's `content`. `sources` contains only file bodies that actually enter the 
 assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
 `repository` from `global`; version 1.0.0's fixed root-file selection currently emits only
 `repository` sources and does not add any global-file discovery.
+
+`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, and truncated working-tree or declared-command listings. Each entry has stable `code`, `subject_kind`, and `subject` fields. `sources`, `context`, and `schema_version` remain unchanged; callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or

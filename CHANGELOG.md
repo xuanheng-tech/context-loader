@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+- Added: JSON results include a top-level `statuses` array that exposes skipped, absent, truncated, unreadable, and globally omitted context conditions without parsing Markdown. Existing `sources`, `context`, and `schema_version` fields are unchanged.
+
 ## 1.0.0
 
 - Changed: Rename the sole CLI and development entrypoint to `project-context`, and use the

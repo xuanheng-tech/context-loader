@@ -34,6 +34,9 @@ GLOBAL_OMISSION = "Omitted: global output limit reached."
 class MarkdownRender:
     output: bytes
     included_sections: tuple[str, ...]
+    omitted_sections: tuple[str, ...]
+    changes_truncated: bool
+    commands_truncated: bool
 
 
 def _display(value: str) -> str:
@@ -173,10 +176,12 @@ def _command_line(command: DeclaredCommand) -> str:
     return f"- `{invocation}` → `{_display(command.target)}`"
 
 
-def _bounded_lines(lines: list[str], limit: int, *, already_truncated: bool = False) -> str:
+def _bounded_lines(
+    lines: list[str], limit: int, *, already_truncated: bool = False
+) -> tuple[str, bool]:
     complete = "\n".join(lines)
     if not already_truncated and len(complete.encode()) <= limit:
-        return complete
+        return complete, False
     marker_size = len(TRUNCATION_MARKER.encode())
     budget = max(0, limit - marker_size - 1)
     selected: list[str] = []
@@ -188,20 +193,15 @@ def _bounded_lines(lines: list[str], limit: int, *, already_truncated: bool = Fa
         selected.append(line)
         used += size
     selected.append(TRUNCATION_MARKER)
-    return "\n".join(selected)
+    return "\n".join(selected), True
 
 
-def _render_commands(commands: tuple[DeclaredCommand, ...]) -> str:
+def _render_commands(commands: tuple[DeclaredCommand, ...]) -> tuple[str, bool]:
     lines = [_command_line(command) for command in commands]
     if not lines:
         lines.append("No supported command declarations found.")
-    return "\n".join(
-        (
-            "## Declared Commands",
-            "",
-            _bounded_lines(lines, DECLARED_COMMANDS_LIMIT_BYTES),
-        )
-    )
+    body, truncated = _bounded_lines(lines, DECLARED_COMMANDS_LIMIT_BYTES)
+    return "\n".join(("## Declared Commands", "", body)), truncated
 
 
 def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int]:
@@ -276,7 +276,7 @@ def _render_directory_tree(tree: DirectoryTree) -> str:
     lines = [_tree_line(entry) for entry in tree.entries]
     if not lines:
         lines.append("No entries.")
-    body = _bounded_lines(
+    body, _truncated = _bounded_lines(
         lines,
         DIRECTORY_TREE_LIMIT_BYTES,
         already_truncated=tree.truncated,
@@ -298,6 +298,8 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             f"- Repository: `{_display(os.fspath(state.repository))}`",
         )
     )
+    commands_section, commands_truncated = _render_commands(project.commands)
+    changes_truncated = _change_lines(state)[1]
     sections: list[tuple[str, str | None]] = [
         ("Git State", _render_git_state(state)),
         (
@@ -312,7 +314,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             "Project Overview",
             _render_source_section("Project Overview", project.overview, README_LIMIT_BYTES),
         ),
-        ("Declared Commands", _render_commands(project.commands)),
+        ("Declared Commands", commands_section),
         ("Project Entry Files", _render_entry_files(project.entry_files)),
         ("Recent Commits", _render_recent_commits(state.commits)),
         ("Directory Tree", _render_directory_tree(project.directory_tree)),
@@ -320,6 +322,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
 
     rendered_parts = [header.encode()]
     included_sections: list[str] = []
+    omitted_sections: list[str] = []
     omission_started = False
     for index, (title, full_section) in enumerate(sections):
         omission = _omitted_section(title).encode()
@@ -330,6 +333,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
         if omission_started or full_section is None:
             selected = omission
             omission_started = True
+            omitted_sections.append(title)
         else:
             candidate = full_section.encode()
             tentative = b"\n\n".join((*rendered_parts, candidate, *future_omissions)) + b"\n"
@@ -339,12 +343,19 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             else:
                 selected = omission
                 omission_started = True
+                omitted_sections.append(title)
         rendered_parts.append(selected)
 
     output = b"\n\n".join(rendered_parts) + b"\n"
     if len(output) > GLOBAL_OUTPUT_LIMIT_BYTES:
         raise RuntimeError("global context output limit could not be satisfied")
-    return MarkdownRender(output=output, included_sections=tuple(included_sections))
+    return MarkdownRender(
+        output=output,
+        included_sections=tuple(included_sections),
+        omitted_sections=tuple(omitted_sections),
+        changes_truncated=changes_truncated,
+        commands_truncated=commands_truncated,
+    )
 
 
 def rendered_source_contents(

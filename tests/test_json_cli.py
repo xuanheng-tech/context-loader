@@ -338,3 +338,155 @@ def test_source_scope_distinguishes_repository_and_global_paths(tmp_path: Path) 
 
     assert source_scope_for_path(repo / "README.md", repo) == "repository"
     assert source_scope_for_path(global_source, repo) == "global"
+
+
+def test_json_statuses_expose_skipped_and_absent_sources(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    outside = tmp_path / "outside-agents.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    (repo / "AGENTS.md").symlink_to(outside)
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert document["schema_version"] == 1
+    assert document["warnings"] == []
+    assert [Path(source["path"]).name for source in document["sources"]] == [
+        "README.md",
+        "pyproject.toml",
+    ]
+    statuses = document["statuses"]
+    assert {
+        "code": "skipped_symlink",
+        "subject": "AGENTS.md",
+        "subject_kind": "source",
+    } in statuses
+    assert any(
+        status["code"] == "not_present" and status["subject_kind"] == "source"
+        for status in statuses
+    )
+    assert "Skipped: symlink." in document["context"]
+    # Existing fields remain present and usable without parsing Markdown.
+    assert (
+        document["context_sha256"]
+        == hashlib.sha256(document["context"].encode("utf-8")).hexdigest()
+    )
+
+
+def test_json_statuses_expose_unreadable_tree_and_preserve_markdown(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+    locked = repo / "locked"
+    locked.mkdir()
+    (locked / "secret.txt").write_text("nope\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        result = _run(repo, output_format="json")
+    finally:
+        locked.chmod(0o700)
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert {
+        "code": "unreadable",
+        "subject": "locked",
+        "subject_kind": "tree_entry",
+    } in document["statuses"]
+    assert "locked/ [Skipped: unreadable.]" in document["context"]
+
+
+def test_json_statuses_compatible_with_existing_source_contract(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Rules\nKeep going.\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert set(document) >= {
+        "schema_version",
+        "tool",
+        "repository",
+        "sources",
+        "statuses",
+        "context",
+        "context_sha256",
+        "warnings",
+    }
+    assert isinstance(document["statuses"], list)
+    for status in document["statuses"]:
+        assert set(status) == {"code", "subject", "subject_kind"}
+    agents = document["sources"][0]
+    assert agents["kind"] == "agents"
+    assert "selection" in agents
+    assert agents["content"] in document["context"]
+
+
+def test_json_statuses_expose_truncated_source(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    # Exceed the README body budget so the collected overview is truncated.
+    (repo / "README.md").write_text("# Overview\n\n" + ("word\n" * 20_000), encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert document["warnings"] == []
+    assert {
+        "code": "truncated",
+        "subject": "README.md",
+        "subject_kind": "source",
+    } in document["statuses"]
+    assert (
+        document["statuses"].count(
+            {
+                "code": "truncated",
+                "subject": "README.md",
+                "subject_kind": "source",
+            }
+        )
+        == 1
+    )
+    assert "… truncated by context-loader …" in document["context"]
+
+
+def test_json_statuses_expose_globally_omitted_sections(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("large subject\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    huge_subject = "s" * 110_000
+    _git(
+        repo,
+        "-c",
+        "user.name=Context Test",
+        "-c",
+        "user.email=context-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        huge_subject,
+    )
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert document["warnings"] == []
+    omitted = [
+        status
+        for status in document["statuses"]
+        if status["code"] == "section_omitted" and status["subject_kind"] == "section"
+    ]
+    subjects = [status["subject"] for status in omitted]
+    assert "Recent Commits" in subjects
+    assert "Directory Tree" in subjects
+    assert subjects == sorted(subjects, key=subjects.index)  # stable encounter order
+    assert len(subjects) == len(set(subjects))
+    assert "## Recent Commits\n\nOmitted: global output limit reached." in document["context"]

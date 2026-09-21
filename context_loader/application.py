@@ -10,9 +10,16 @@ from pathlib import Path
 
 from . import __version__
 from .collect import (
+    NOT_PRESENT,
+    SKIPPED_ENCODING,
+    SKIPPED_NOT_REGULAR,
+    SKIPPED_SYMLINK,
+    SKIPPED_UNREADABLE,
+    TRUNCATION_MARKER,
     AgentsSectionAuditEntry,
     AgentsSelectionAudit,
     AgentsSelectionInputError,
+    CollectedFile,
     ProjectContext,
     collect_project_context,
 )
@@ -21,6 +28,14 @@ from .render import render_markdown_with_details, rendered_source_contents
 
 JSON_SCHEMA_VERSION = 1
 TOOL_NAME = "context-loader"
+
+_STATUS_CODE_BY_MESSAGE = {
+    NOT_PRESENT: "not_present",
+    SKIPPED_SYMLINK: "skipped_symlink",
+    SKIPPED_NOT_REGULAR: "skipped_not_regular",
+    SKIPPED_ENCODING: "skipped_encoding",
+    SKIPPED_UNREADABLE: "skipped_unreadable",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +62,15 @@ class ProjectContextSource:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextStatus:
+    """One machine-readable skipped, omitted, truncated, or unreadable condition."""
+
+    code: str
+    subject_kind: str
+    subject: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectContextResult:
     schema_version: int
     tool: ToolIdentity
@@ -55,6 +79,7 @@ class ProjectContextResult:
     context: str
     context_sha256: str
     warnings: tuple[str, ...]
+    statuses: tuple[ContextStatus, ...]
 
 
 def _text_sha256(content: str) -> str:
@@ -102,6 +127,79 @@ def _sources(
     return tuple(sources)
 
 
+def _status(code: str, subject_kind: str, subject: str) -> ContextStatus:
+    return ContextStatus(code=code, subject_kind=subject_kind, subject=subject)
+
+
+def _statuses_for_source(source: CollectedFile) -> list[ContextStatus]:
+    if source.status is not None:
+        code = _STATUS_CODE_BY_MESSAGE.get(source.status, "skipped_unreadable")
+        return [_status(code, "source", source.name)]
+    statuses: list[ContextStatus] = []
+    if source.truncated or (source.selection is not None and source.selection.truncated):
+        statuses.append(_status("truncated", "source", source.name))
+    if source.selection is not None:
+        if source.selection.parse_fallback:
+            statuses.append(_status("parse_fallback", "source", source.name))
+        if source.selection.source_scan_truncated:
+            statuses.append(_status("source_scan_truncated", "source", source.name))
+        if source.selection.index_truncated:
+            statuses.append(_status("index_truncated", "source", source.name))
+    return statuses
+
+
+def _build_statuses(
+    project: ProjectContext,
+    *,
+    omitted_sections: tuple[str, ...],
+    changes_truncated: bool,
+    commands_truncated: bool,
+    rendered_sources: tuple[ProjectContextSource, ...],
+) -> tuple[ContextStatus, ...]:
+    statuses: list[ContextStatus] = []
+    for source in (project.instructions, project.overview, *project.entry_files):
+        statuses.extend(_statuses_for_source(source))
+
+    truncated_sources = {
+        status.subject
+        for status in statuses
+        if status.subject_kind == "source" and status.code == "truncated"
+    }
+    for source in rendered_sources:
+        if TRUNCATION_MARKER not in source.content:
+            continue
+        name = source.path.name
+        if name in truncated_sources:
+            continue
+        statuses.append(_status("truncated", "source", name))
+        truncated_sources.add(name)
+
+    if commands_truncated:
+        statuses.append(_status("truncated", "commands", "Declared Commands"))
+    if changes_truncated:
+        statuses.append(_status("truncated", "changes", "Working Tree Changes"))
+
+    if project.directory_tree.truncated:
+        statuses.append(_status("truncated", "tree", "Directory Tree"))
+    for entry in project.directory_tree.entries:
+        if entry.kind == "unreadable_directory":
+            subject = entry.path if entry.path else "."
+            statuses.append(_status("unreadable", "tree_entry", subject))
+
+    for title in omitted_sections:
+        statuses.append(_status("section_omitted", "section", title))
+
+    deduped: list[ContextStatus] = []
+    seen: set[tuple[str, str, str]] = set()
+    for status in statuses:
+        key = (status.code, status.subject_kind, status.subject)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(status)
+    return tuple(deduped)
+
+
 def load_project_context(
     repo: str | os.PathLike[str],
     *,
@@ -120,6 +218,14 @@ def load_project_context(
         raise ContextLoaderError(str(exc), exit_code=2) from None
     rendered = render_markdown_with_details(state, project)
     context = rendered.output.decode("utf-8")
+    sources = _sources(state.repository, project, rendered.included_sections)
+    statuses = _build_statuses(
+        project,
+        omitted_sections=rendered.omitted_sections,
+        changes_truncated=rendered.changes_truncated,
+        commands_truncated=rendered.commands_truncated,
+        rendered_sources=sources,
+    )
     return ProjectContextResult(
         schema_version=JSON_SCHEMA_VERSION,
         tool=ToolIdentity(name=TOOL_NAME, version=__version__),
@@ -127,10 +233,11 @@ def load_project_context(
             requested_path=location.requested_path,
             canonical_root=location.canonical_root,
         ),
-        sources=_sources(state.repository, project, rendered.included_sections),
+        sources=sources,
         context=context,
         context_sha256=hashlib.sha256(rendered.output).hexdigest(),
         warnings=(),
+        statuses=statuses,
     )
 
 
@@ -154,6 +261,14 @@ def _selection_document(selection: AgentsSelectionAudit) -> dict[str, object]:
         "parse_fallback": selection.parse_fallback,
         "source_scan_truncated": selection.source_scan_truncated,
         "index_truncated": selection.index_truncated,
+    }
+
+
+def _status_document(status: ContextStatus) -> dict[str, object]:
+    return {
+        "code": status.code,
+        "subject": status.subject,
+        "subject_kind": status.subject_kind,
     }
 
 
@@ -184,6 +299,7 @@ def render_json(result: ProjectContextResult) -> bytes:
             "canonical_root": os.fspath(result.repository.canonical_root),
         },
         "sources": [_source_document(source) for source in result.sources],
+        "statuses": [_status_document(status) for status in result.statuses],
         "context": result.context,
         "context_sha256": result.context_sha256,
         "warnings": list(result.warnings),
