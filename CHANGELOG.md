@@ -12,11 +12,15 @@ dates.
   published in release 1.2.0 and are never reused, so each `schema_version` continues to name exactly
   one key set; the compact document remains the full document minus `sources[*].content`.
 - Added: JSON documents (`--format json` and `--format json-compact`) include an always-present
-  existence-only `nested_context` object listing nested `AGENTS.md` relative paths found by a
-  contents-blind bounded scan (depth 4 and 2,000-directory scan bounds, 32-path report cap;
+  existence-only `nested_context` object listing non-directory nested `AGENTS.md` relative paths
+  found by a contents-blind bounded scan (depth 4 and 2,000-directory scan bounds, 32-path and
+  4-KiB report caps; symlinked entries listed without ever resolving or reading their targets;
   `.git`, `.venv`, `venv`, `node_modules` and `site-packages` trees skipped), with
   `list_truncated`/`scan_truncated` flags mirrored as `nested_agents_list_truncated` and
-  `nested_agents_scan_truncated` statuses. Root-file selection, Authority Boundary semantics and
+  `nested_agents_scan_truncated` statuses. Listed paths are sanitized with the same escaping the
+  Markdown uses for repository-derived text, which also fixes a pre-existing crash class: an
+  unreadable non-UTF-8 directory name no longer breaks `--format json` through a raw status
+  subject. Root-file selection, Authority Boundary semantics and
   Markdown bytes are otherwise unchanged; presence is not instruction and nested contents are
   never read or transported.
 - Docs: the `json-compact` section states that `sources` is provenance/index metadata whose bodies

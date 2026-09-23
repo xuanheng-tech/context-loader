@@ -29,6 +29,7 @@ DIRECTORY_TREE_MAX_DEPTH = 2
 NESTED_AGENTS_MAX_DEPTH = 4
 NESTED_AGENTS_MAX_DIRECTORIES = 2_000
 NESTED_AGENTS_MAX_FILES = 32
+NESTED_AGENTS_MAX_LIST_BYTES = 4 * 1024
 NESTED_AGENTS_EXCLUDED_DIRECTORIES = frozenset(
     {".git", ".venv", "node_modules", "site-packages", "venv"}
 )
@@ -995,13 +996,18 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
     """List nested AGENTS.md paths under a bounded, contents-blind directory scan.
 
     The scan reads directory entries only: it never opens a candidate file, never
-    follows a symlink, and reports truncation honestly so presence claims stay
-    auditable. Contents remain the caller's responsibility to read.
+    traverses a symlink, and reports truncation honestly so presence claims stay
+    auditable. Any non-directory entry named AGENTS.md is listed, including
+    symlinked ones, because existence comes from enumeration alone; entry types
+    are never resolved beyond directory-vs-not, and contents remain the caller's
+    responsibility to read.
     """
     files: list[str] = []
+    reported_bytes = 0
     state = {"list_truncated": False, "scan_truncated": False, "directories": 0}
 
     def walk(directory_descriptor: int, prefix: str, depth: int) -> None:
+        nonlocal reported_bytes
         if depth > NESTED_AGENTS_MAX_DEPTH or state["directories"] >= NESTED_AGENTS_MAX_DIRECTORIES:
             state["scan_truncated"] = True
             return
@@ -1016,27 +1022,26 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
         for entry in entries:
             try:
                 is_directory = entry.is_dir(follow_symlinks=False)
-                is_symlink = entry.is_symlink()
             except OSError:
                 state["scan_truncated"] = True
                 continue
             path = f"{prefix}/{entry.name}" if prefix else entry.name
-            if is_directory and not is_symlink:
+            if is_directory:
                 if entry.name not in NESTED_AGENTS_EXCLUDED_DIRECTORIES:
                     subdirectories.append(path)
                 continue
-            if entry.name != "AGENTS.md" or is_directory or not prefix:
+            if entry.name != "AGENTS.md" or not prefix:
                 continue
-            try:
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-            except OSError:
-                state["scan_truncated"] = True
-                continue
-            if len(files) < NESTED_AGENTS_MAX_FILES:
-                files.append(path)
-            else:
+            if len(files) >= NESTED_AGENTS_MAX_FILES:
                 state["list_truncated"] = True
+                continue
+            name_bytes = len(path.encode("utf-8", errors="surrogateescape"))
+            name_bytes += 1 if files else 0
+            if reported_bytes + name_bytes > NESTED_AGENTS_MAX_LIST_BYTES:
+                state["list_truncated"] = True
+                continue
+            reported_bytes += name_bytes
+            files.append(path)
         for path in subdirectories:
             flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
             try:

@@ -668,6 +668,9 @@ def test_json_nested_context_is_existence_only(tmp_path: Path) -> None:
     outside = tmp_path / "outside-agents.md"
     outside.write_text("OUTSIDE AGENTS MUST NOT TRAVEL\n", encoding="utf-8")
     (ghost / "AGENTS.md").symlink_to(outside)
+    dangling = repo / "dang"
+    dangling.mkdir()
+    (dangling / "AGENTS.md").symlink_to(repo / "never-created.md")
     loop = repo / "loop"
     loop.symlink_to(repo, target_is_directory=True)
     for vendored_name in ("node_modules", ".venv", "venv", "site-packages"):
@@ -683,8 +686,15 @@ def test_json_nested_context_is_existence_only(tmp_path: Path) -> None:
     assert first.stdout == second.stdout
     document = json.loads(first.stdout)
     nested = document["nested_context"]
+    # Symlinked and dangling AGENTS.md entries are listed by existence alone:
+    # the scan never resolves targets and never carries their bytes.
     assert nested == {
-        "files": ["docs/AGENTS.md", "pkg/service/AGENTS.md"],
+        "files": [
+            "dang/AGENTS.md",
+            "docs/AGENTS.md",
+            "ghost/AGENTS.md",
+            "pkg/service/AGENTS.md",
+        ],
         "list_truncated": False,
         "scan_truncated": False,
     }
@@ -767,12 +777,82 @@ def test_json_nested_context_marks_unreadable_directory(tmp_path: Path) -> None:
     assert b"hidden" not in result.stdout
 
 
+def test_json_nested_context_sanitizes_undecodable_names(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    weird = os.fsdecode(b"weird_\xff\xfe-dir")
+    directory = repo / weird
+    directory.mkdir()
+    (directory / "AGENTS.md").write_text("x\n", encoding="utf-8")
+
+    full = _run(repo, output_format="json")
+    compact = _run(repo, output_format="json-compact")
+
+    assert full.returncode == compact.returncode == 0
+    document = json.loads(full.stdout)
+    assert document["nested_context"]["files"] == ["weird_\\xff\\xfe-dir/AGENTS.md"]
+    assert document["nested_context"]["scan_truncated"] is False
+    assert json.loads(compact.stdout)["nested_context"] == document["nested_context"]
+
+
+def test_json_unreadable_directory_with_undecodable_name_still_renders(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    locked = repo / os.fsdecode(b"locked-\xff-dir")
+    locked.mkdir()
+    (locked / "inner.txt").write_text("x\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        result = _run(repo, output_format="json")
+    finally:
+        locked.chmod(0o700)
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    assert any(
+        status["code"] == "unreadable" and "\\xff" in status["subject"]
+        for status in document["statuses"]
+    )
+
+
+def test_json_nested_context_bytes_report_cap(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    for index in range(20):
+        directory = repo / ("d" + str(index).zfill(2) + ("x" * 250))
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    nested = json.loads(result.stdout)["nested_context"]
+    # Each path is 263 bytes; the 4 KiB budget admits 15 (263 + 15 x 264 > 4096 > 14).
+    assert len(nested["files"]) == 15
+    assert nested["list_truncated"] is True
+    assert nested["scan_truncated"] is False
+
+
+def test_readme_example_and_help_match_emitted_schema_versions() -> None:
+    import re
+
+    from context_loader.application import COMPACT_JSON_SCHEMA_VERSION, JSON_SCHEMA_VERSION
+    from context_loader.cli import _parser
+
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    match = re.search(r'"schema_version": (\d+),\n  "tool"', readme)
+    assert match is not None
+    assert int(match.group(1)) == JSON_SCHEMA_VERSION
+    assert f"`schema_version` {COMPACT_JSON_SCHEMA_VERSION} document" in readme
+    format_help = next(action.help for action in _parser()._actions if action.dest == "format")
+    assert "schema version" not in format_help
+    assert "schema_version" not in format_help
+
+
 def test_nested_presence_documented_bounds_match_code() -> None:
     from context_loader import collect
 
     assert collect.NESTED_AGENTS_MAX_DEPTH == 4
     assert collect.NESTED_AGENTS_MAX_DIRECTORIES == 2_000
     assert collect.NESTED_AGENTS_MAX_FILES == 32
+    assert collect.NESTED_AGENTS_MAX_LIST_BYTES == 4 * 1024
     excluded = {".git", ".venv", "venv", "node_modules", "site-packages"}
     assert frozenset(excluded) == collect.NESTED_AGENTS_EXCLUDED_DIRECTORIES
 
@@ -785,4 +865,7 @@ def test_json_document_schema_versions_name_exact_shapes() -> None:
     # default moved to 3 and the compact projection to 4. Each number names exactly one key set.
     assert application.JSON_SCHEMA_VERSION == 3
     assert application.COMPACT_JSON_SCHEMA_VERSION == 4
-    assert application.COMPACT_JSON_SCHEMA_VERSION == application.JSON_SCHEMA_VERSION + 1
+    assert {
+        application.JSON_SCHEMA_VERSION,
+        application.COMPACT_JSON_SCHEMA_VERSION,
+    }.isdisjoint({1, 2})

@@ -25,7 +25,7 @@ from .collect import (
     collect_project_context,
 )
 from .git import ContextLoaderError, collect_repository
-from .render import render_markdown_with_details, rendered_source_contents
+from .render import _display, render_markdown_with_details, rendered_source_contents
 
 # Each value names one exact document shape and is never reused: 1 and 2 are the
 # shapes published in release 1.2.0, so adding the nested_context object to both
@@ -190,7 +190,7 @@ def _build_statuses(
     for entry in project.directory_tree.entries:
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
-            statuses.append(_status("unreadable", "tree_entry", subject))
+            statuses.append(_status("unreadable", "tree_entry", _display(subject)))
 
     for title in omitted_sections:
         statuses.append(_status("section_omitted", "section", title))
@@ -321,7 +321,9 @@ def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes
         ],
         "statuses": [_status_document(status) for status in result.statuses],
         "nested_context": {
-            "files": list(result.nested_context.files),
+            # Filesystem names arrive undecoded (surrogate-escaped); sanitize exactly like
+            # tree/change paths so no raw byte can reach the UTF-8 document.
+            "files": [_display(path) for path in result.nested_context.files],
             "list_truncated": result.nested_context.list_truncated,
             "scan_truncated": result.nested_context.scan_truncated,
         },

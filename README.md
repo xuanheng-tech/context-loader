@@ -187,17 +187,21 @@ only `repository` sources and does not add any global-file discovery.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
-target path. Existing source fields and schema version 1 remain unchanged.
+target path. Existing per-source fields remain unchanged; the document's exact key
+set (now including `nested_context`) is named by its `schema_version`, described below.
 
 `nested_context` is always present and existence-only: `files` lists repository-relative paths of
-`AGENTS.md` files under subdirectories, found by a bounded scan that enumerates directory entries,
-never opens or reads a candidate file and never traverses a symlink; it carries no sizes, no mtimes
-and no contents. Any
+non-directory `AGENTS.md` entries under subdirectories, found by a bounded scan that enumerates
+directory entries, never opens or reads a candidate file and never traverses a symlink; it carries
+no sizes, no mtimes and no contents. A symlinked (even dangling) `AGENTS.md` is listed, because its
+existence comes from the directory entry itself; the scan never resolves what it points at. Any
 `.git`, `.venv`, `venv`, `node_modules` or `site-packages` directory is skipped at every depth:
 package-manager and interpreter-managed trees are not authored repository instructions.
-`list_truncated` means more matching files exist beyond the 32-path report cap;
-`scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or the scan
-could not read or open a directory, so absence of a path is not proof of absence of the file. The corresponding
+`list_truncated` means more matching entries exist beyond the report caps (32 paths and 4 KiB of
+path bytes); `scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or
+a directory or entry could not be read, so absence of a path is not proof of absence of the file.
+Paths are sanitized with the same escaping the Markdown uses for repository-derived text, so the
+document is always valid UTF-8. The corresponding
 `nested_agents_list_truncated` and `nested_agents_scan_truncated` status entries mirror both flags.
 Presence is not instruction: whether a nested file applies, and its text, remain the caller's
 judgment; Markdown output is unchanged.
@@ -220,9 +224,13 @@ consumer without adding information. Nothing is lost: each omitted body remains 
 `content_sha256` still fingerprints that rendered body, and `path` plus `canonical_root` locate the
 underlying file for a bounded manual re-read (whose raw bytes may differ from the rendered body as
 defined above). `schema_version` is an exact document selector, not an upgrade marker: version 4 is
-a field-set projection of version 3, and each number names exactly one key set, so consumers must
-branch on the value and must not apply `>=`-superset reasoning. Introducing this compact format does
+a field-set projection of version 3, so consumers must branch on the value and must not apply
+`>=`-superset reasoning. Introducing this compact format does
 not otherwise change default Markdown bytes, exit codes or determinism.
+
+One historical exception is acknowledged: releases 1.0.0 and 1.1.0 both emitted `schema_version` 1
+although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward each emitted number
+names exactly one key set, and the `nested_context` renumber below enforces that rule going forward.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
 for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.2.0`. Version 1

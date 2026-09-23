@@ -39,8 +39,8 @@ def _parser() -> argparse.ArgumentParser:
         choices=("markdown", "json", "json-compact"),
         default="markdown",
         help=(
-            "output format (default: markdown); json-compact emits schema "
-            "version 2 without duplicated source bodies"
+            "output format (default: markdown); json-compact omits the "
+            "duplicated source bodies (see README, Compact model consumption)"
         ),
     )
     return parser
