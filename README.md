@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.2.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.2.0'
+uv tool install 'context-loader==1.3.0'
 ```
 
 ```bash
-pip install 'context-loader==1.2.0'
+pip install 'context-loader==1.3.0'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.2.0`. Install its matching published release or an exact source commit.
+Source version: `1.3.0`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.2.0'
+uv tool install 'context-loader==1.3.0'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.2.0'
+pip install 'context-loader==1.3.0'
 ```
 
-For development or source-based installs tracking current repository (`1.2.0`):
+For development or source-based installs tracking current repository (`1.3.0`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -136,7 +136,7 @@ consumption”. The declared contract for `--format json` is:
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -233,10 +233,10 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and the `nested_context` renumber below enforces that rule going forward.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.2.0`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.0`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
-`nested_context` changes the default document's key set, the version that claims to name that key
-set moves to 3, and the compact projection follows to 4.
+`nested_context` changes the default document's key set, version 3 names the current full-document
+key set and version 4 names the compact projection.
 Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
