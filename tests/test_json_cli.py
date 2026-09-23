@@ -495,7 +495,7 @@ def test_json_statuses_expose_globally_omitted_sections(tmp_path: Path) -> None:
 def test_json_compact_projects_json_document_without_source_bodies(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     (repo / "AGENTS.md").write_text("# Rules\n\n## Deployment\npush with care\n", encoding="utf-8")
-    (repo / "README.md").write_text("# Overview\nread me\n", encoding="utf-8")
+    (repo / "README.md").write_bytes(b"# Overview\r\nread me\r\n")
     (repo / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
 
     full = _run(repo, output_format="json")
@@ -545,6 +545,11 @@ def test_json_compact_projects_json_document_without_source_bodies(tmp_path: Pat
     ).encode()
     assert compact.stdout == canonical + b"\n"
     assert compact.stdout.endswith(b"\n") and not compact.stdout.endswith(b"\n\n")
+    readme = next(
+        source for source in full_document["sources"] if source["path"].endswith("README.md")
+    )
+    assert "\r" not in readme["content"]
+    assert hashlib.sha256((repo / "README.md").read_bytes()).hexdigest() != readme["content_sha256"]
 
 
 def test_json_compact_preserves_statuses_from_rendered_entry_bodies(tmp_path: Path) -> None:
@@ -575,6 +580,11 @@ def test_json_compact_preserves_statuses_from_rendered_entry_bodies(tmp_path: Pa
     ]
     assert len(go_mod) == 1
     assert go_mod[0]["content"].endswith("… truncated by context-loader …")
+    # The capture kept the whole file, so the truncated status is marker-derived:
+    # only the rendered body is cut, by the aggregate entry-file budget.
+    go_mod_bytes = (repo / "go.mod").read_bytes()
+    assert len(go_mod_bytes) <= 8_192
+    assert len(go_mod[0]["content"].encode()) < len(go_mod_bytes)
 
 
 def test_json_compact_accepts_subdirectory_and_keeps_context_equal(tmp_path: Path) -> None:
@@ -608,11 +618,12 @@ def test_json_compact_focus_selection_flows_into_both_documents(tmp_path: Path) 
         encoding="utf-8",
     )
     focus = "JoinQuant provider runtime"
+    target_path = "runtime/provider_probe.py"
 
     unfocused_json = _run(repo, output_format="json")
     unfocused = _run(repo, output_format="json-compact")
-    focused = _run(repo, output_format="json-compact", focus=focus)
-    focused_full = _run(repo, output_format="json", focus=focus)
+    focused = _run(repo, output_format="json-compact", focus=focus, path=target_path)
+    focused_full = _run(repo, output_format="json", focus=focus, path=target_path)
 
     assert all(
         result.returncode == 0 for result in (unfocused_json, unfocused, focused, focused_full)
@@ -630,4 +641,5 @@ def test_json_compact_focus_selection_flows_into_both_documents(tmp_path: Path) 
     assert "content" not in agents
     assert full_agents["content"] in focused_document["context"]
     assert focus.encode() not in focused.stdout
+    assert target_path.encode() not in focused.stdout
     assert unfocused_document["context"] == json.loads(unfocused_json.stdout)["context"]

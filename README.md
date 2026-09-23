@@ -191,9 +191,9 @@ target path. Existing source fields and schema version 1 remain unchanged.
 `warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`, `path`,
 `content_sha256` and optional `selection` — is identical to `--format json` for the same arguments.
 The projection exists because the selected source bodies already occur verbatim inside `context`,
-so carrying them again in `sources` duplicates a large share of the document bytes (measured
-19-44% on real worktrees, and 0% when those sections are globally omitted) for a model consumer
-without adding information. Nothing is lost: each omitted body remains inside `context`,
+so carrying them again in `sources` duplicates a large share of the document bytes (measured up to
+~44% on real worktrees, scaling with how much of `context` those bodies occupy) for a model
+consumer without adding information. Nothing is lost: each omitted body remains inside `context`,
 `content_sha256` still fingerprints that rendered body, and `path` plus `canonical_root` locate the
 underlying file for a bounded manual re-read (whose raw bytes may differ from the rendered body as
 defined above). `schema_version` is an exact document selector, not an upgrade marker: version 2 is
