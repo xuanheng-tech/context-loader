@@ -53,8 +53,8 @@ The repository also retains `./project-context` as a direct development entry po
 ### Distributions
 
 The sole distribution is **`context-loader`**, containing the `context_loader` runtime
-and the `project-context` console script. Version `1.0.0` breaks the CLI name and Markdown
-heading contract. The JSON schema is unchanged. Terminal and any executor call this same
+and the `project-context` console script. Version `1.0.0` broke the CLI name and Markdown
+heading contract while leaving the then-current JSON schema unchanged. Terminal and any executor call this same
 entry point with explicit repository and focus arguments; no provider adapter or private
 session state is involved.
 
@@ -334,7 +334,8 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.0.0 does not provide AI summaries, project-type detection, nested `AGENTS.md` handling,
+Version 1.3.0 does not provide AI summaries, project-type detection, loading or transport of
+nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
 
@@ -348,8 +349,9 @@ just check
 
 ## Version maintenance
 
-The versions in `pyproject.toml` and `context_loader/__init__.py`, the matching `CHANGELOG.md`
-section, required tests, and the README current-stable declaration plus `context-loader==X.Y.Z`
+The versions in `pyproject.toml` and `context_loader/__init__.py`, the `tool_version` in
+`tool_cli_contract.json`, the matching `CHANGELOG.md` section, required tests, and the README
+current-stable declaration plus `context-loader==X.Y.Z`
 install pins must change in the same release-preparation batch. `CHANGELOG.md` is the
 authoritative version-change record. `scripts/release.py` rejects README stable/install
 pins that disagree with the intended package version; historical changelog entries are

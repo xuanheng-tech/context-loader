@@ -28,6 +28,10 @@ dates.
 - Docs: the `json-compact` section states that `sources` is provenance/index metadata whose bodies
   already occur verbatim in `context`, so consumers must not reopen source files to recover a body
   the document already carried.
+- Changed: `tool_cli_contract.json` advances `tool_version` to 1.3.0 while `contract_version` stays
+  3: this release changes the JSON document shape — governed by the output `schema_version` values 3
+  and 4 — and no command, flag, format choice or precondition, mirroring the 1.1.0 precedent where a
+  document-shape addition left the public CLI contract version alone.
 
 ## 1.2.0
 
