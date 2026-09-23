@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from context_loader import __version__
-from context_loader.cli import main
+from context_loader.cli import _parser, main
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CLI = PROJECT_ROOT / "project-context"
@@ -234,6 +234,26 @@ def test_selection_inputs_are_bounded_and_repository_relative(
     assert result.returncode == 2
     assert result.stdout == b""
     assert result.stderr.startswith(b"error: ")
+
+
+def test_format_choices_are_the_declared_markdown_and_machine_formats() -> None:
+    format_action = next(action for action in _parser()._actions if action.dest == "format")
+
+    assert tuple(format_action.choices) == ("markdown", "json", "json-compact")
+    assert format_action.default == "markdown"
+
+
+def test_unknown_format_is_rejected_with_empty_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repository(tmp_path)
+
+    exit_code = main(["--repo", os.fspath(repo), "--format", "yaml"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
 
 
 @pytest.mark.parametrize("kind", ["relative", "subdirectory", "non_git", "bare"])

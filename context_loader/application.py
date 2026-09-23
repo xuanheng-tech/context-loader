@@ -27,6 +27,7 @@ from .git import ContextLoaderError, collect_repository
 from .render import render_markdown_with_details, rendered_source_contents
 
 JSON_SCHEMA_VERSION = 1
+COMPACT_JSON_SCHEMA_VERSION = 2
 TOOL_NAME = "context-loader"
 
 _STATUS_CODE_BY_MESSAGE = {
@@ -272,24 +273,30 @@ def _status_document(status: ContextStatus) -> dict[str, object]:
     }
 
 
-def _source_document(source: ProjectContextSource) -> dict[str, object]:
+def _source_document(source: ProjectContextSource, *, include_content: bool) -> dict[str, object]:
     document: dict[str, object] = {
         "ordinal": source.ordinal,
         "kind": source.kind,
         "scope": source.scope,
         "path": os.fspath(source.path),
         "content_sha256": source.content_sha256,
-        "content": source.content,
     }
+    if include_content:
+        document["content"] = source.content
     if source.selection is not None:
         document["selection"] = _selection_document(source.selection)
     return document
 
 
-def render_json(result: ProjectContextResult) -> bytes:
-    """Serialize one result as stable UTF-8 JSON followed by exactly one newline."""
+def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes:
+    """Serialize one result as stable UTF-8 JSON followed by exactly one newline.
+
+    ``compact`` projects away the duplicated source bodies only at this
+    boundary: statuses and context were computed from the full model at load
+    time, so both documents agree on everything except ``sources[*].content``.
+    """
     document = {
-        "schema_version": result.schema_version,
+        "schema_version": (COMPACT_JSON_SCHEMA_VERSION if compact else result.schema_version),
         "tool": {
             "name": result.tool.name,
             "version": result.tool.version,
@@ -298,7 +305,9 @@ def render_json(result: ProjectContextResult) -> bytes:
             "requested_path": os.fspath(result.repository.requested_path),
             "canonical_root": os.fspath(result.repository.canonical_root),
         },
-        "sources": [_source_document(source) for source in result.sources],
+        "sources": [
+            _source_document(source, include_content=not compact) for source in result.sources
+        ],
         "statuses": [_status_document(status) for status in result.statuses],
         "context": result.context,
         "context_sha256": result.context_sha256,

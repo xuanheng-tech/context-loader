@@ -490,3 +490,144 @@ def test_json_statuses_expose_globally_omitted_sections(tmp_path: Path) -> None:
     assert subjects == sorted(subjects, key=subjects.index)  # stable encounter order
     assert len(subjects) == len(set(subjects))
     assert "## Recent Commits\n\nOmitted: global output limit reached." in document["context"]
+
+
+def test_json_compact_projects_json_document_without_source_bodies(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Rules\n\n## Deployment\npush with care\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Overview\nread me\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
+
+    full = _run(repo, output_format="json")
+    compact = _run(repo, output_format="json-compact")
+    repeat = _run(repo, output_format="json-compact")
+
+    assert full.returncode == compact.returncode == repeat.returncode == 0
+    assert full.stderr == compact.stderr == b""
+    assert repeat.stdout == compact.stdout
+    full_document = json.loads(full.stdout)
+    document = json.loads(compact.stdout)
+    assert full_document["schema_version"] == 1
+    assert document["schema_version"] == 2
+    assert (
+        set(document)
+        == set(full_document)
+        == {
+            "schema_version",
+            "tool",
+            "repository",
+            "sources",
+            "statuses",
+            "context",
+            "context_sha256",
+            "warnings",
+        }
+    )
+    for key in ("tool", "repository", "statuses", "context", "context_sha256", "warnings"):
+        assert document[key] == full_document[key]
+    assert len(document["sources"]) == len(full_document["sources"])
+    assert document["sources"] != []
+    for full_source, compact_source in zip(
+        full_document["sources"], document["sources"], strict=True
+    ):
+        assert "content" not in compact_source
+        assert {k: v for k, v in full_source.items() if k != "content"} == compact_source
+        assert full_source["content"] in document["context"]
+        assert (
+            full_source["content_sha256"]
+            == hashlib.sha256(full_source["content"].encode("utf-8")).hexdigest()
+        )
+    canonical = json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    assert compact.stdout == canonical + b"\n"
+    assert compact.stdout.endswith(b"\n") and not compact.stdout.endswith(b"\n\n")
+
+
+def test_json_compact_preserves_statuses_from_rendered_entry_bodies(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    # Bodies stay under the per-file capture limit but exceed the 24-KiB aggregate
+    # budget, so only the rendered go.mod body exposes the cut via its marker.
+    filler = "word\n" * 1_600  # 8,000 bytes each
+    (repo / "package.json").write_text(filler, encoding="utf-8")
+    (repo / "Makefile").write_text(filler, encoding="utf-8")
+    (repo / "Cargo.toml").write_text(filler, encoding="utf-8")
+    (repo / "go.mod").write_text(filler, encoding="utf-8")
+
+    full = _run(repo, output_format="json")
+    compact = _run(repo, output_format="json-compact")
+
+    assert full.returncode == compact.returncode == 0
+    full_document = json.loads(full.stdout)
+    document = json.loads(compact.stdout)
+    assert {
+        "code": "truncated",
+        "subject": "go.mod",
+        "subject_kind": "source",
+    } in full_document["statuses"]
+    assert document["statuses"] == full_document["statuses"]
+    assert "… truncated by context-loader …" in document["context"]
+    go_mod = [
+        source for source in full_document["sources"] if Path(source["path"]).name == "go.mod"
+    ]
+    assert len(go_mod) == 1
+    assert go_mod[0]["content"].endswith("… truncated by context-loader …")
+
+
+def test_json_compact_accepts_subdirectory_and_keeps_context_equal(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+    nested = repo / "nested"
+    nested.mkdir()
+
+    from_root = _run(repo, output_format="json-compact")
+    from_nested = _run(nested, output_format="json-compact")
+    nested_json = _run(nested, output_format="json")
+
+    assert from_root.returncode == from_nested.returncode == nested_json.returncode == 0
+    root_document = json.loads(from_root.stdout)
+    nested_document = json.loads(from_nested.stdout)
+    assert nested_document["repository"] == {
+        "requested_path": os.fspath(nested.resolve()),
+        "canonical_root": os.fspath(repo.resolve()),
+    }
+    assert root_document["context"] == nested_document["context"]
+    assert nested_document["context"] == json.loads(nested_json.stdout)["context"]
+
+
+def test_json_compact_focus_selection_flows_into_both_documents(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text(
+        "# Demo\n\n## Core\ncore\n\n"
+        "## Unrelated Commands\n"
+        + ("build lint command\n" * 500)
+        + "\n## JoinQuant Provider Runtime\nLATE_RUNTIME_GATE\n",
+        encoding="utf-8",
+    )
+    focus = "JoinQuant provider runtime"
+
+    unfocused_json = _run(repo, output_format="json")
+    unfocused = _run(repo, output_format="json-compact")
+    focused = _run(repo, output_format="json-compact", focus=focus)
+    focused_full = _run(repo, output_format="json", focus=focus)
+
+    assert all(
+        result.returncode == 0 for result in (unfocused_json, unfocused, focused, focused_full)
+    )
+    unfocused_document = json.loads(unfocused.stdout)
+    focused_document = json.loads(focused.stdout)
+    assert "LATE_RUNTIME_GATE" not in unfocused_document["context"]
+    assert "LATE_RUNTIME_GATE" in focused_document["context"]
+    assert focused_document["context"] == json.loads(focused_full.stdout)["context"]
+    assert focused_document["statuses"] == json.loads(focused_full.stdout)["statuses"]
+    agents = focused_document["sources"][0]
+    full_agents = json.loads(focused_full.stdout)["sources"][0]
+    assert agents["selection"] == full_agents["selection"]
+    assert agents["content_sha256"] == full_agents["content_sha256"]
+    assert "content" not in agents
+    assert full_agents["content"] in focused_document["context"]
+    assert focus.encode() not in focused.stdout
+    assert unfocused_document["context"] == json.loads(unfocused_json.stdout)["context"]

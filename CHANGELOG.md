@@ -6,6 +6,19 @@ dates.
 
 ## Unreleased
 
+- Added: `--format json-compact` emits a `schema_version` 2 document that is exactly the version-1
+  JSON document with the duplicated `sources[*].content` bodies omitted. Those bodies already occur
+  verbatim inside `context`, so the projection removes the second copy a model consumer would
+  otherwise pay for; every other field (`context`, `context_sha256`, `statuses`, `warnings`, `tool`,
+  `repository`, and each source's `ordinal`, `kind`, `scope`, `path`, `content_sha256` and optional
+  `selection`) is identical to `--format json` for the same arguments.
+- Preserve: Default Markdown output, `--format json` bytes, exit codes, security bounds and
+  determinism are unchanged, and `--focus` remains AGENTS section selection only.
+- Preserve: `tool_cli_contract.json` still declares `contract_version` 2 for the published 1.1.0
+  sdist, which embeds that identity immutably. Declaring the json-compact format value and its
+  precondition tokens must therefore land in one batch with the next release-preparation version
+  bump, not under an already-published version.
+
 ## 1.1.0
 
 - Added: JSON results include a top-level `statuses` array that exposes skipped, absent, truncated, unreadable, and globally omitted context conditions without parsing Markdown. Existing `sources`, `context`, and `schema_version` fields are unchanged.

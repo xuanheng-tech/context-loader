@@ -36,9 +36,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=("markdown", "json"),
+        choices=("markdown", "json", "json-compact"),
         default="markdown",
-        help="output format (default: markdown)",
+        help=(
+            "output format (default: markdown); json-compact emits schema "
+            "version 2 without duplicated source bodies"
+        ),
     )
     return parser
 
@@ -52,11 +55,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             focus=arguments.focus,
             path=arguments.target_path,
         )
-        output = (
-            result.context.encode("utf-8")
-            if arguments.format == "markdown"
-            else render_json(result)
-        )
+        if arguments.format == "markdown":
+            output = result.context.encode("utf-8")
+        elif arguments.format == "json":
+            output = render_json(result)
+        else:
+            output = render_json(result, compact=True)
     except ContextLoaderError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code

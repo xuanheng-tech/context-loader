@@ -93,16 +93,17 @@ project-context --version
 project-context --repo /home/user/projects/example
 project-context --repo /home/user/projects/example --format markdown
 project-context --repo /home/user/projects/example --format json
+project-context --repo /home/user/projects/example --format json-compact
 project-context --repo /home/user/projects/example \
   --focus "Authentication and session management" \
   --path auth/session.py
 ```
 
 `--format` defaults to `markdown`. In Markdown mode, `--repo` retains the 0.1.1 contract: it must be
-the absolute, canonical root of a non-bare Git working tree. In JSON mode, an absolute existing
-directory inside the working tree is accepted; symlinks are normalized and the discovered root is
-reported as `canonical_root`. Relative paths, non-Git directories, regular files, and bare
-repositories are rejected in both modes.
+the absolute, canonical root of a non-bare Git working tree. In the `json` and `json-compact` modes,
+an absolute existing directory inside the working tree is accepted; symlinks are normalized and the
+discovered root is reported as `canonical_root`. Relative paths, non-Git directories, regular files,
+and bare repositories are rejected in every mode.
 
 `--focus` and `--path` are optional, bounded selection signals for the root `AGENTS.md`. `--path`
 must be repository-relative. The collector does not retain either input in output or audit data.
@@ -125,8 +126,10 @@ The output has no generated timestamp, AI summary, architecture inference, or di
 
 ## JSON Output
 
-`--format json` writes exactly one compact UTF-8 JSON document plus one trailing newline to stdout.
-Keys are serialized in sorted order with `ensure_ascii=False`. The declared contract is:
+`--format json` writes exactly one separator-compact UTF-8 JSON document plus one trailing newline
+to stdout. Keys are serialized in sorted order with `ensure_ascii=False`. `--format json-compact`
+uses the identical serialization; only the field set differs, as described under “Compact model
+consumption”. The declared contract for `--format json` is:
 
 ```json
 {
@@ -168,10 +171,12 @@ Keys are serialized in sorted order with `ensure_ascii=False`. The declared cont
 ```
 
 `context_sha256` hashes the UTF-8 bytes of `context`; each `content_sha256` does the same for that
-source's `content`. `sources` contains only file bodies that actually enter the final context, in
-assembly order, after the existing newline normalization and truncation rules. `scope` distinguishes
-`repository` from `global`; version 1.0.0's fixed root-file selection currently emits only
-`repository` sources and does not add any global-file discovery.
+source's `content` body as rendered (after newline normalization, any `AGENTS.md` section selection
+and any truncation marker) — never for the raw bytes of the file at `path`, which match only for
+unselected, untruncated LF files. `sources` contains only file bodies that actually enter the final
+context, in assembly order, after the existing newline normalization and truncation rules. `scope`
+distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
+only `repository` sources and does not add any global-file discovery.
 
 `statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, and truncated working-tree or declared-command listings. Each entry has stable `code`, `subject_kind`, and `subject` fields. `sources`, `context`, and `schema_version` remain unchanged; callers can ignore `statuses` safely.
 
@@ -179,8 +184,26 @@ The optional `selection` object is present only on a rendered `AGENTS.md` source
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
 target path. Existing source fields and schema version 1 remain unchanged.
 
-The JSON schema version and package version are independent: `schema_version` is currently the
-integer `1`, while `tool.version` is `1.1.0`. Callers must depend only on fields declared above.
+### Compact model consumption (`--format json-compact`)
+
+`--format json-compact` emits a `schema_version` 2 document: exactly the version-1 document with
+`sources[*].content` omitted. Every other field — `context`, `context_sha256`, `statuses`,
+`warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`, `path`,
+`content_sha256` and optional `selection` — is identical to `--format json` for the same arguments.
+The projection exists because the selected source bodies already occur verbatim inside `context`,
+so carrying them again in `sources` duplicates a large share of the document bytes (measured
+19-44% on real worktrees, and 0% when those sections are globally omitted) for a model consumer
+without adding information. Nothing is lost: each omitted body remains inside `context`,
+`content_sha256` still fingerprints that rendered body, and `path` plus `canonical_root` locate the
+underlying file for a bounded manual re-read (whose raw bytes may differ from the rendered body as
+defined above). `schema_version` is an exact document selector, not an upgrade marker: version 2 is
+a field-set projection of version 1, so consumers must branch on the value and must not apply
+`>=`-superset reasoning. Default Markdown and `--format json` output bytes, exit codes and
+determinism are unchanged.
+
+The JSON schema version and package version are independent: `--format json` currently emits
+`schema_version` `1` and `--format json-compact` emits `2`, while `tool.version` is `1.1.0`.
+Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
 
