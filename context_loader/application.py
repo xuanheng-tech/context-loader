@@ -20,6 +20,7 @@ from .collect import (
     AgentsSelectionAudit,
     AgentsSelectionInputError,
     CollectedFile,
+    NestedContextPresence,
     ProjectContext,
     collect_project_context,
 )
@@ -81,6 +82,7 @@ class ProjectContextResult:
     context_sha256: str
     warnings: tuple[str, ...]
     statuses: tuple[ContextStatus, ...]
+    nested_context: NestedContextPresence
 
 
 def _text_sha256(content: str) -> str:
@@ -190,6 +192,11 @@ def _build_statuses(
     for title in omitted_sections:
         statuses.append(_status("section_omitted", "section", title))
 
+    if project.nested_context.list_truncated:
+        statuses.append(_status("nested_agents_list_truncated", "nested_context", "AGENTS.md"))
+    if project.nested_context.scan_truncated:
+        statuses.append(_status("nested_agents_scan_truncated", "nested_context", "AGENTS.md"))
+
     deduped: list[ContextStatus] = []
     seen: set[tuple[str, str, str]] = set()
     for status in statuses:
@@ -239,6 +246,7 @@ def load_project_context(
         context_sha256=hashlib.sha256(rendered.output).hexdigest(),
         warnings=(),
         statuses=statuses,
+        nested_context=project.nested_context,
     )
 
 
@@ -309,6 +317,11 @@ def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes
             _source_document(source, include_content=not compact) for source in result.sources
         ],
         "statuses": [_status_document(status) for status in result.statuses],
+        "nested_context": {
+            "files": list(result.nested_context.files),
+            "list_truncated": result.nested_context.list_truncated,
+            "scan_truncated": result.nested_context.scan_truncated,
+        },
         "context": result.context,
         "context_sha256": result.context_sha256,
         "warnings": list(result.warnings),

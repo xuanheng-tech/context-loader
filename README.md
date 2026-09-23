@@ -166,6 +166,11 @@ consumption”. The declared contract for `--format json` is:
   "context": "the same assembled Markdown context",
   "context_sha256": "sha256-hex",
   "statuses": [],
+  "nested_context": {
+    "files": ["docs/AGENTS.md"],
+    "list_truncated": false,
+    "scan_truncated": false
+  },
   "warnings": []
 }
 ```
@@ -178,18 +183,36 @@ context, in assembly order, after the existing newline normalization and truncat
 distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
 only `repository` sources and does not add any global-file discovery.
 
-`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, and truncated working-tree or declared-command listings. Each entry has stable `code`, `subject_kind`, and `subject` fields. `sources`, `context`, and `schema_version` remain unchanged; callers can ignore `statuses` safely.
+`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. Each entry has stable `code`, `subject_kind`, and `subject` fields. `sources`, `context`, and `schema_version` remain unchanged; callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
 target path. Existing source fields and schema version 1 remain unchanged.
 
+`nested_context` is always present and existence-only: `files` lists repository-relative paths of
+`AGENTS.md` files under subdirectories, found by a bounded scan that enumerates directory entries,
+never opens or reads a candidate file and never traverses a symlink; it carries no sizes, no mtimes
+and no contents. Any
+`.git`, `.venv`, `venv`, `node_modules` or `site-packages` directory is skipped at every depth:
+package-manager and interpreter-managed trees are not authored repository instructions.
+`list_truncated` means more matching files exist beyond the 32-path report cap;
+`scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or the scan
+could not read or open a directory, so absence of a path is not proof of absence of the file. The corresponding
+`nested_agents_list_truncated` and `nested_agents_scan_truncated` status entries mirror both flags.
+Presence is not instruction: whether a nested file applies, and its text, remain the caller's
+judgment; Markdown output is unchanged.
+
 ### Compact model consumption (`--format json-compact`)
 
 `--format json-compact` emits a `schema_version` 2 document: exactly the version-1 document with
 `sources[*].content` omitted. Every other field — `context`, `context_sha256`, `statuses`,
-`warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`, `path`,
-`content_sha256` and optional `selection` — is identical to `--format json` for the same arguments.
+`nested_context`, `warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`,
+`path`, `content_sha256` and optional `selection` — is identical to `--format json` for the same
+arguments.
+`sources` is provenance and index metadata, not the place a body must be fetched from: every omitted
+body is already inside `context` verbatim, so consumers should read `context` for rule text and
+reopen a source file only when the rendered body was truncated or selected away — never to recover a
+body that the document already carried.
 The projection exists because the selected source bodies already occur verbatim inside `context`,
 so carrying them again in `sources` duplicates a large share of the document bytes (measured up to
 ~44% on real worktrees, scaling with how much of `context` those bodies occupy) for a model
@@ -217,7 +240,9 @@ Resolving an instruction hierarchy stays with the calling agent harness. That in
 shared or user-level instruction file outside the repository, nested or scoped `AGENTS.md` files
 under subdirectories, and any include or import directive written inside an instruction file:
 such a directive is transported as literal text and is never followed. `--path` selects sections
-of the repository-root `AGENTS.md` only; it never changes which files are read.
+of the repository-root `AGENTS.md` only; it never changes which files are read. The JSON-only
+`nested_context` field reports the existence of nested `AGENTS.md` paths without reading them;
+deciding whether any of them applies stays with the calling agent harness exactly as before.
 
 A successful run therefore proves that the bounded root context was collected and rendered. It
 does not prove that every instruction applicable to a task has been loaded.
@@ -258,6 +283,8 @@ scan that ends before EOF still reports the characters it could not select.
 - All entry-file bodies: 24 KiB
 - Declared commands: 8 KiB
 - Directory tree: 12 KiB, 300 entries, and depth 2
+- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, and at most 32 reported paths;
+  file contents are never read
 - Working-tree changes: 100 paths and 4 KiB
 - Recent commits: 8
 - Git subprocess output: 16 MiB (bounded while reading)

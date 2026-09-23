@@ -518,12 +518,21 @@ def test_json_compact_projects_json_document_without_source_bodies(tmp_path: Pat
             "repository",
             "sources",
             "statuses",
+            "nested_context",
             "context",
             "context_sha256",
             "warnings",
         }
     )
-    for key in ("tool", "repository", "statuses", "context", "context_sha256", "warnings"):
+    for key in (
+        "tool",
+        "repository",
+        "statuses",
+        "nested_context",
+        "context",
+        "context_sha256",
+        "warnings",
+    ):
         assert document[key] == full_document[key]
     assert len(document["sources"]) == len(full_document["sources"])
     assert document["sources"] != []
@@ -643,3 +652,126 @@ def test_json_compact_focus_selection_flows_into_both_documents(tmp_path: Path) 
     assert focus.encode() not in focused.stdout
     assert target_path.encode() not in focused.stdout
     assert unfocused_document["context"] == json.loads(unfocused_json.stdout)["context"]
+
+
+def test_json_nested_context_is_existence_only(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    docs = repo / "docs"
+    docs.mkdir()
+    (docs / "AGENTS.md").write_text("NESTED RULE TEXT MUST NOT TRAVEL\n", encoding="utf-8")
+    deep = repo / "pkg" / "service"
+    deep.mkdir(parents=True)
+    (deep / "AGENTS.md").write_text("second\n", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# Root rules\n", encoding="utf-8")
+    ghost = repo / "ghost"
+    ghost.mkdir()
+    outside = tmp_path / "outside-agents.md"
+    outside.write_text("OUTSIDE AGENTS MUST NOT TRAVEL\n", encoding="utf-8")
+    (ghost / "AGENTS.md").symlink_to(outside)
+    loop = repo / "loop"
+    loop.symlink_to(repo, target_is_directory=True)
+    for vendored_name in ("node_modules", ".venv", "venv", "site-packages"):
+        vendored = repo / vendored_name / "pkg"
+        vendored.mkdir(parents=True)
+        (vendored / "AGENTS.md").write_text("vendored\n", encoding="utf-8")
+
+    first = _run(repo, output_format="json")
+    second = _run(repo, output_format="json")
+    compact = _run(repo, output_format="json-compact")
+
+    assert first.returncode == second.returncode == compact.returncode == 0
+    assert first.stdout == second.stdout
+    document = json.loads(first.stdout)
+    nested = document["nested_context"]
+    assert nested == {
+        "files": ["docs/AGENTS.md", "pkg/service/AGENTS.md"],
+        "list_truncated": False,
+        "scan_truncated": False,
+    }
+    assert b"NESTED RULE TEXT MUST NOT TRAVEL" not in first.stdout
+    assert b"OUTSIDE AGENTS MUST NOT TRAVEL" not in first.stdout
+    assert b"vendored" not in first.stdout
+    assert json.loads(compact.stdout)["nested_context"] == nested
+    statuses = document["statuses"]
+    assert not any(status["subject_kind"] == "nested_context" for status in statuses)
+
+
+def test_json_nested_context_reports_list_truncation(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    # Created newest-first so surviving selection must be name-ordered, not time-ordered.
+    for index in range(34, -1, -1):
+        directory = repo / f"component{index:02d}"
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    nested = document["nested_context"]
+    assert nested["files"] == [f"component{index:02d}/AGENTS.md" for index in range(32)]
+    assert nested["list_truncated"] is True
+    assert nested["scan_truncated"] is False
+    assert {
+        "code": "nested_agents_list_truncated",
+        "subject": "AGENTS.md",
+        "subject_kind": "nested_context",
+    } in document["statuses"]
+
+
+def test_json_nested_context_reports_scan_depth_truncation(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    beyond = repo / "a" / "b" / "c" / "d" / "e"
+    beyond.mkdir(parents=True)
+    (beyond / "AGENTS.md").write_text("too deep\n", encoding="utf-8")
+    edge = repo / "a" / "b" / "c" / "d"
+    (edge / "AGENTS.md").write_text("at depth four\n", encoding="utf-8")
+    visible = repo / "src" / "core"
+    visible.mkdir(parents=True)
+    (visible / "AGENTS.md").write_text("in budget\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    nested = document["nested_context"]
+    assert nested["files"] == ["a/b/c/d/AGENTS.md", "src/core/AGENTS.md"]
+    assert nested["list_truncated"] is False
+    assert nested["scan_truncated"] is True
+    assert {
+        "code": "nested_agents_scan_truncated",
+        "subject": "AGENTS.md",
+        "subject_kind": "nested_context",
+    } in document["statuses"]
+
+
+def test_json_nested_context_marks_unreadable_directory(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    visible = repo / "open"
+    visible.mkdir()
+    (visible / "AGENTS.md").write_text("seen\n", encoding="utf-8")
+    locked = repo / "locked"
+    locked.mkdir()
+    (locked / "AGENTS.md").write_text("hidden\n", encoding="utf-8")
+    locked.chmod(0o000)
+    try:
+        result = _run(repo, output_format="json")
+    finally:
+        locked.chmod(0o700)
+
+    assert result.returncode == 0
+    document = json.loads(result.stdout)
+    nested = document["nested_context"]
+    assert nested["files"] == ["open/AGENTS.md"]
+    assert nested["scan_truncated"] is True
+    assert b"hidden" not in result.stdout
+
+
+def test_nested_presence_documented_bounds_match_code() -> None:
+    from context_loader import collect
+
+    assert collect.NESTED_AGENTS_MAX_DEPTH == 4
+    assert collect.NESTED_AGENTS_MAX_DIRECTORIES == 2_000
+    assert collect.NESTED_AGENTS_MAX_FILES == 32
+    excluded = {".git", ".venv", "venv", "node_modules", "site-packages"}
+    assert frozenset(excluded) == collect.NESTED_AGENTS_EXCLUDED_DIRECTORIES

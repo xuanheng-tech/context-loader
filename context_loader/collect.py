@@ -26,6 +26,12 @@ DECLARED_COMMANDS_LIMIT_BYTES = 8 * 1024
 DIRECTORY_TREE_LIMIT_BYTES = 12 * 1024
 DIRECTORY_TREE_MAX_ITEMS = 300
 DIRECTORY_TREE_MAX_DEPTH = 2
+NESTED_AGENTS_MAX_DEPTH = 4
+NESTED_AGENTS_MAX_DIRECTORIES = 2_000
+NESTED_AGENTS_MAX_FILES = 32
+NESTED_AGENTS_EXCLUDED_DIRECTORIES = frozenset(
+    {".git", ".venv", "node_modules", "site-packages", "venv"}
+)
 FILE_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
 MAX_FILE_SCAN_BYTES = FILE_SCAN_LIMIT_BYTES
 TRUNCATION_MARKER = "… truncated by context-loader …"
@@ -191,12 +197,22 @@ class DirectoryTree:
 
 
 @dataclass(frozen=True, slots=True)
+class NestedContextPresence:
+    """Existence-only index of nested AGENTS.md files; their contents are never read."""
+
+    files: tuple[str, ...]
+    list_truncated: bool = False
+    scan_truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectContext:
     instructions: CollectedFile
     overview: CollectedFile
     entry_files: tuple[CollectedFile, ...]
     commands: tuple[DeclaredCommand, ...]
     directory_tree: DirectoryTree
+    nested_context: NestedContextPresence
 
 
 @dataclass(frozen=True, slots=True)
@@ -975,6 +991,78 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
     return DirectoryTree(tuple(collected), truncated)
 
 
+def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
+    """List nested AGENTS.md paths under a bounded, contents-blind directory scan.
+
+    The scan reads directory entries only: it never opens a candidate file, never
+    follows a symlink, and reports truncation honestly so presence claims stay
+    auditable. Contents remain the caller's responsibility to read.
+    """
+    files: list[str] = []
+    state = {"list_truncated": False, "scan_truncated": False, "directories": 0}
+
+    def walk(directory_descriptor: int, prefix: str, depth: int) -> None:
+        if depth > NESTED_AGENTS_MAX_DEPTH or state["directories"] >= NESTED_AGENTS_MAX_DIRECTORIES:
+            state["scan_truncated"] = True
+            return
+        state["directories"] += 1
+        try:
+            with os.scandir(directory_descriptor) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError:
+            state["scan_truncated"] = True
+            return
+        subdirectories: list[str] = []
+        for entry in entries:
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+                is_symlink = entry.is_symlink()
+            except OSError:
+                state["scan_truncated"] = True
+                continue
+            path = f"{prefix}/{entry.name}" if prefix else entry.name
+            if is_directory and not is_symlink:
+                if entry.name not in NESTED_AGENTS_EXCLUDED_DIRECTORIES:
+                    subdirectories.append(path)
+                continue
+            if entry.name != "AGENTS.md" or is_directory or not prefix:
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                state["scan_truncated"] = True
+                continue
+            if len(files) < NESTED_AGENTS_MAX_FILES:
+                files.append(path)
+            else:
+                state["list_truncated"] = True
+        for path in subdirectories:
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                child_descriptor = os.open(
+                    path.rsplit("/", 1)[-1], flags, dir_fd=directory_descriptor
+                )
+            except OSError:
+                state["scan_truncated"] = True
+                continue
+            try:
+                walk(child_descriptor, path, depth + 1)
+            finally:
+                os.close(child_descriptor)
+
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_descriptor = os.open(repository, flags)
+    except OSError:
+        return NestedContextPresence((), False, True)
+    try:
+        walk(root_descriptor, "", 0)
+    finally:
+        os.close(root_descriptor)
+    return NestedContextPresence(tuple(files), state["list_truncated"], state["scan_truncated"])
+
+
 def collect_project_context(
     repository: Path,
     *,
@@ -1001,4 +1089,5 @@ def collect_project_context(
         entry_files=entry_files,
         commands=_collect_commands(entry_files),
         directory_tree=_collect_directory_tree(repository),
+        nested_context=collect_nested_agents_presence(repository),
     )

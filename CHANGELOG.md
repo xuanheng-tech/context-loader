@@ -6,6 +6,18 @@ dates.
 
 ## Unreleased
 
+- Added: JSON documents (`--format json` and `--format json-compact`) include an always-present
+  existence-only `nested_context` object listing nested `AGENTS.md` relative paths found by a
+  contents-blind bounded scan (depth 4 and 2,000-directory scan bounds, 32-path report cap;
+  `.git`, `.venv`, `venv`, `node_modules` and `site-packages` trees skipped), with
+  `list_truncated`/`scan_truncated` flags mirrored as `nested_agents_list_truncated` and
+  `nested_agents_scan_truncated` statuses. Root-file selection, Authority Boundary semantics,
+  Markdown bytes and all existing JSON field rules are otherwise unchanged; presence is not
+  instruction and nested contents are never read or transported.
+- Docs: the `json-compact` section states that `sources` is provenance/index metadata whose bodies
+  already occur verbatim in `context`, so consumers must not reopen source files to recover a body
+  the document already carried.
+
 ## 1.2.0
 
 - Added: `--format json-compact` emits a `schema_version` 2 document that is exactly the version-1

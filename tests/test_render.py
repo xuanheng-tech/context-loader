@@ -4,6 +4,7 @@ from context_loader.collect import (
     CollectedFile,
     DeclaredCommand,
     DirectoryTree,
+    NestedContextPresence,
     ProjectContext,
     TreeEntry,
 )
@@ -35,6 +36,7 @@ def test_markdown_renderer_matches_1_0_0_golden() -> None:
         directory_tree=DirectoryTree(
             (TreeEntry(".git", "directory"), TreeEntry("README.md", "file"))
         ),
+        nested_context=NestedContextPresence(("docs/AGENTS.md",), False, True),
     )
     fixture = Path(__file__).with_name("fixtures") / "markdown_1_0_0.md"
 
