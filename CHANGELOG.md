@@ -6,14 +6,19 @@ dates.
 
 ## Unreleased
 
+- Changed: because the new top-level `nested_context` key changes the exact document shape, the JSON
+  document schema version advances — `--format json` now emits `schema_version` `3` (was `1`) and
+  `--format json-compact` emits `4` (was `2`). Versions `1` and `2` stay bound to the shapes already
+  published in release 1.2.0 and are never reused, so each `schema_version` continues to name exactly
+  one key set; the compact document remains the full document minus `sources[*].content`.
 - Added: JSON documents (`--format json` and `--format json-compact`) include an always-present
   existence-only `nested_context` object listing nested `AGENTS.md` relative paths found by a
   contents-blind bounded scan (depth 4 and 2,000-directory scan bounds, 32-path report cap;
   `.git`, `.venv`, `venv`, `node_modules` and `site-packages` trees skipped), with
   `list_truncated`/`scan_truncated` flags mirrored as `nested_agents_list_truncated` and
-  `nested_agents_scan_truncated` statuses. Root-file selection, Authority Boundary semantics,
-  Markdown bytes and all existing JSON field rules are otherwise unchanged; presence is not
-  instruction and nested contents are never read or transported.
+  `nested_agents_scan_truncated` statuses. Root-file selection, Authority Boundary semantics and
+  Markdown bytes are otherwise unchanged; presence is not instruction and nested contents are
+  never read or transported.
 - Docs: the `json-compact` section states that `sources` is provenance/index metadata whose bodies
   already occur verbatim in `context`, so consumers must not reopen source files to recover a body
   the document already carried.

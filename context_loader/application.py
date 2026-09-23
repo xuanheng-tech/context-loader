@@ -27,8 +27,11 @@ from .collect import (
 from .git import ContextLoaderError, collect_repository
 from .render import render_markdown_with_details, rendered_source_contents
 
-JSON_SCHEMA_VERSION = 1
-COMPACT_JSON_SCHEMA_VERSION = 2
+# Each value names one exact document shape and is never reused: 1 and 2 are the
+# shapes published in release 1.2.0, so adding the nested_context object to both
+# formats moved the default document to 3 and the compact projection to 4.
+JSON_SCHEMA_VERSION = 3
+COMPACT_JSON_SCHEMA_VERSION = 4
 TOOL_NAME = "context-loader"
 
 _STATUS_CODE_BY_MESSAGE = {

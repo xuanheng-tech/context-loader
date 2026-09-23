@@ -133,7 +133,7 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert result.stderr == b""
     document = json.loads(result.stdout)
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 3
     assert document["tool"] == {"name": "context-loader", "version": "1.2.0"}
     assert document["repository"] == {
         "requested_path": os.fspath(repo.resolve()),
@@ -352,7 +352,7 @@ def test_json_statuses_expose_skipped_and_absent_sources(tmp_path: Path) -> None
 
     assert result.returncode == 0
     document = json.loads(result.stdout)
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 3
     assert document["warnings"] == []
     assert [Path(source["path"]).name for source in document["sources"]] == [
         "README.md",
@@ -507,8 +507,8 @@ def test_json_compact_projects_json_document_without_source_bodies(tmp_path: Pat
     assert repeat.stdout == compact.stdout
     full_document = json.loads(full.stdout)
     document = json.loads(compact.stdout)
-    assert full_document["schema_version"] == 1
-    assert document["schema_version"] == 2
+    assert full_document["schema_version"] == 3
+    assert document["schema_version"] == 4
     assert (
         set(document)
         == set(full_document)
@@ -775,3 +775,14 @@ def test_nested_presence_documented_bounds_match_code() -> None:
     assert collect.NESTED_AGENTS_MAX_FILES == 32
     excluded = {".git", ".venv", "venv", "node_modules", "site-packages"}
     assert frozenset(excluded) == collect.NESTED_AGENTS_EXCLUDED_DIRECTORIES
+
+
+def test_json_document_schema_versions_name_exact_shapes() -> None:
+    from context_loader import application
+
+    # 1 (json) and 2 (compact) are the shapes published in release 1.2.0 and must never be
+    # re-emitted: adding the nested_context key changed the default document's key set, so the
+    # default moved to 3 and the compact projection to 4. Each number names exactly one key set.
+    assert application.JSON_SCHEMA_VERSION == 3
+    assert application.COMPACT_JSON_SCHEMA_VERSION == 4
+    assert application.COMPACT_JSON_SCHEMA_VERSION == application.JSON_SCHEMA_VERSION + 1

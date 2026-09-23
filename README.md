@@ -133,7 +133,7 @@ consumption”. The declared contract for `--format json` is:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "tool": {
     "name": "context-loader",
     "version": "1.2.0"
@@ -183,7 +183,7 @@ context, in assembly order, after the existing newline normalization and truncat
 distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
 only `repository` sources and does not add any global-file discovery.
 
-`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. Each entry has stable `code`, `subject_kind`, and `subject` fields. `sources`, `context`, and `schema_version` remain unchanged; callers can ignore `statuses` safely.
+`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
@@ -204,7 +204,7 @@ judgment; Markdown output is unchanged.
 
 ### Compact model consumption (`--format json-compact`)
 
-`--format json-compact` emits a `schema_version` 2 document: exactly the version-1 document with
+`--format json-compact` emits a `schema_version` 4 document: exactly the version-3 document with
 `sources[*].content` omitted. Every other field — `context`, `context_sha256`, `statuses`,
 `nested_context`, `warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`,
 `path`, `content_sha256` and optional `selection` — is identical to `--format json` for the same
@@ -219,13 +219,16 @@ so carrying them again in `sources` duplicates a large share of the document byt
 consumer without adding information. Nothing is lost: each omitted body remains inside `context`,
 `content_sha256` still fingerprints that rendered body, and `path` plus `canonical_root` locate the
 underlying file for a bounded manual re-read (whose raw bytes may differ from the rendered body as
-defined above). `schema_version` is an exact document selector, not an upgrade marker: version 2 is
-a field-set projection of version 1, so consumers must branch on the value and must not apply
-`>=`-superset reasoning. Default Markdown and `--format json` output bytes, exit codes and
-determinism are unchanged.
+defined above). `schema_version` is an exact document selector, not an upgrade marker: version 4 is
+a field-set projection of version 3, and each number names exactly one key set, so consumers must
+branch on the value and must not apply `>=`-superset reasoning. Introducing this compact format does
+not otherwise change default Markdown bytes, exit codes or determinism.
 
-The JSON schema version and package version are independent: `--format json` currently emits
-`schema_version` `1` and `--format json-compact` emits `2`, while `tool.version` is `1.2.0`.
+The JSON schema version and package version are independent: this build emits `schema_version` `3`
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.2.0`. Version 1
+and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
+`nested_context` changes the default document's key set, the version that claims to name that key
+set moves to 3, and the compact projection follows to 4.
 Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.
