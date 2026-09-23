@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.1.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.2.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.1.0'
+uv tool install 'context-loader==1.2.0'
 ```
 
 ```bash
-pip install 'context-loader==1.1.0'
+pip install 'context-loader==1.2.0'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.1.0`. Install its matching published release or an exact source commit.
+Source version: `1.2.0`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.1.0'
+uv tool install 'context-loader==1.2.0'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.1.0'
+pip install 'context-loader==1.2.0'
 ```
 
-For development or source-based installs tracking current repository (`1.1.0`):
+For development or source-based installs tracking current repository (`1.2.0`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -136,7 +136,7 @@ consumption”. The declared contract for `--format json` is:
   "schema_version": 1,
   "tool": {
     "name": "context-loader",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -202,7 +202,7 @@ a field-set projection of version 1, so consumers must branch on the value and m
 determinism are unchanged.
 
 The JSON schema version and package version are independent: `--format json` currently emits
-`schema_version` `1` and `--format json-compact` emits `2`, while `tool.version` is `1.1.0`.
+`schema_version` `1` and `--format json-compact` emits `2`, while `tool.version` is `1.2.0`.
 Callers must depend only on fields declared above.
 The document contains no generated time or random identifier, so unchanged input produces identical
 JSON bytes. On failure, stdout remains empty and stderr contains only a short diagnostic.

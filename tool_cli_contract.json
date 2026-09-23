@@ -15,6 +15,7 @@
         "repo_is_absolute_git_worktree",
         "markdown_requires_canonical_root",
         "json_accepts_path_inside_worktree",
+        "json_compact_accepts_path_inside_worktree",
         "target_path_is_repository_relative"
       ],
       "result_statuses": [
@@ -24,11 +25,12 @@
       ]
     }
   ],
-  "contract_version": 2,
+  "contract_version": 3,
   "flags": {
     "format": [
       "markdown",
-      "json"
+      "json",
+      "json-compact"
     ],
     "output": "stdout",
     "stderr": "bounded_diagnostic_only"
@@ -44,5 +46,5 @@
   ],
   "schema_version": 1,
   "tool_name": "context-loader",
-  "tool_version": "1.1.0"
+  "tool_version": "1.2.0"
 }

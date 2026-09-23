@@ -16,7 +16,7 @@ def test_public_cli_contract_is_consistent() -> None:
         project = tomllib.load(stream)["project"]
 
     assert contract["schema_version"] == 1
-    assert contract["contract_version"] == 2
+    assert contract["contract_version"] == 3
     assert contract["tool_name"] == "context-loader"
     assert contract["tool_version"] == project["version"]
     assert {command["name"] for command in contract["commands"]} == {"project-context"}
@@ -37,6 +37,9 @@ def test_public_cli_contract_is_consistent() -> None:
         if action_str.startswith("--")
     }
     assert declared_flags == parser_flags
+    format_action = next(action for action in parser._actions if action.dest == "format")
+    assert contract["flags"]["format"] == list(format_action.choices)
+    assert "json_compact_accepts_path_inside_worktree" in contract["commands"][0]["preconditions"]
     assert {command["operation_class"] for command in contract["commands"]} == {"read_only"}
     assert "/home/" not in contract_path.read_text(encoding="utf-8")
 

@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+## 1.2.0
+
 - Added: `--format json-compact` emits a `schema_version` 2 document that is exactly the version-1
   JSON document with the duplicated `sources[*].content` bodies omitted. Those bodies already occur
   verbatim inside `context`, so the projection removes the second copy a model consumer would
@@ -14,10 +16,10 @@ dates.
   `selection`) is identical to `--format json` for the same arguments.
 - Preserve: Default Markdown output, `--format json` bytes, exit codes, security bounds and
   determinism are unchanged, and `--focus` remains AGENTS section selection only.
-- Preserve: `tool_cli_contract.json` still declares `contract_version` 2 for the published 1.1.0
-  sdist, which embeds that identity immutably. Declaring the json-compact format value and its
-  precondition tokens must therefore land in one batch with the next release-preparation version
-  bump, not under an already-published version.
+- Changed: `tool_cli_contract.json` declares the widened CLI surface: `flags.format` gains
+  `json-compact`, the `json_compact_accepts_path_inside_worktree` precondition is added, and
+  `contract_version` moves to 3 for `tool_version` 1.2.0. The published 1.1.0 sdist keeps
+  `contract_version` 2 immutably.
 
 ## 1.1.0
 
