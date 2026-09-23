@@ -36,4 +36,9 @@ jobs:
           github-token: ""
 
       - name: Check
-        run: just check
+        # Contract mirrors git-finalizer 8a0326e: the DAC-sensitive test suite
+        # must not run under root, whose CAP_DAC_OVERRIDE defeats chmod 000.
+        run: |
+          set -euo pipefail
+          chown -R ubuntu:ubuntu "$GITHUB_WORKSPACE"
+          sudo -u ubuntu -H env "PATH=$PATH" just check
