@@ -13,9 +13,11 @@ dates.
   JSON string bytes actually written, including quoting, the array separator and, for the first
   entry, the array's own brackets — instead of on pre-escape path bytes. Escape-dense names
   (backticks, undecodable byte sequences) could previously make the emitted `nested_context.files`
-  carry several times the documented 4 KiB; a name sitting exactly on the boundary can also admit
-  one entry fewer now that the quoting is counted. Both are value changes for that one field: no key
-  set changes, so `schema_version` stays 3/4, and `list_truncated` keeps its meaning.
+  carry several times the documented 4 KiB; because quoting is now counted, an array whose total is
+  already near 4 KiB can also admit one entry fewer even with ordinary names. Both are value changes
+  in that one field and in the two signals derived from it — `list_truncated` can become true and the
+  `nested_agents_list_truncated` status can appear where 1.3.0 reported neither — while no key set
+  changes, so `schema_version` stays 3/4 and `list_truncated` keeps its meaning.
 - Added: `--format json` and `--format json-compact` enforce a bound on the final serialized
   document (8,388,608 bytes including the trailing newline). The bound is fail-closed: an
   over-budget repository exits 1 with an empty stdout and a one-line diagnostic rather than emitting

@@ -200,11 +200,13 @@ existence comes from the directory entry itself; the scan never resolves what it
 package-manager and interpreter-managed trees are not authored repository instructions.
 `list_truncated` means more matching entries exist beyond the report caps: 32 paths, and a 4 KiB
 budget metered on the emitted array itself — each path's escaped, JSON-serialized string plus its
-separator, with the array's brackets charged to the first entry — so the value never costs more
-than the budget it declares. `scan_truncated` means the depth (4) or directory-count (2,000) budget
-was reached, or a directory or entry could not be read, so absence of a path is not proof of absence
-of the file. Nested paths are sanitized with the same escaping the Markdown uses for
-repository-derived text, so a nested name the filesystem could not decode never breaks the document;
+separator, with the array's brackets charged to the first entry — so the emitted array never costs
+more than the budget it declares. Because quoting is counted, an array already near the cap can
+report one path fewer than an older release did, and then says so through `list_truncated`.
+`scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or a directory
+or entry could not be read, so absence of a path is not proof of absence of the file. Nested paths
+are sanitized with the same escaping the Markdown uses for repository-derived text, so a nested name
+the filesystem could not decode never breaks the document;
 see “Limits” for the root paths that are emitted verbatim. The corresponding
 `nested_agents_list_truncated` and `nested_agents_scan_truncated` status entries mirror both flags.
 Presence is not instruction: whether a nested file applies, and its text, remain the caller's
