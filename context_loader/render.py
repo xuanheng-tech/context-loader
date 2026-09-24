@@ -19,6 +19,7 @@ from .collect import (
     DirectoryTree,
     ProjectContext,
     TreeEntry,
+    display_text,
     render_agents_selection_audit,
 )
 from .git import RecentCommit, RepositoryState
@@ -39,30 +40,11 @@ class MarkdownRender:
     commands_truncated: bool
 
 
-def _display(value: str) -> str:
-    rendered: list[str] = []
-    for character in value:
-        codepoint = ord(character)
-        if character == "`":
-            rendered.append(r"\x60")
-        elif 0xDC80 <= codepoint <= 0xDCFF:
-            rendered.append(f"\\x{codepoint - 0xDC00:02x}")
-        elif character.isprintable():
-            rendered.append(character)
-        elif codepoint <= 0xFF:
-            rendered.append(f"\\x{codepoint:02x}")
-        elif codepoint <= 0xFFFF:
-            rendered.append(f"\\u{codepoint:04x}")
-        else:
-            rendered.append(f"\\U{codepoint:08x}")
-    return "".join(rendered)
-
-
 def _display_limited(value: str, limit: int) -> str | None:
     rendered: list[str] = []
     used = 0
     for character in value:
-        piece = _display(character)
+        piece = display_text(character)
         size = len(piece.encode())
         if used + size > limit:
             return None
@@ -121,7 +103,7 @@ def _change_lines(state: RepositoryState) -> tuple[list[str], bool]:
     for change in state.changes:
         if len(lines) == MAX_CHANGE_ENTRIES:
             return lines, True
-        line = f"- `{change.status} {_display(change.path)}`"
+        line = f"- `{change.status} {display_text(change.path)}`"
         line_bytes = len(f"{line}\n".encode())
         if used_bytes + line_bytes > MAX_CHANGE_MARKDOWN_BYTES:
             return lines, True
@@ -134,10 +116,10 @@ def _render_git_state(state: RepositoryState) -> str:
     lines = [
         "## Git State",
         "",
-        f"- Branch: `{_display(state.branch)}`",
-        f"- HEAD: `{_display(state.head)}`",
-        f"- Upstream: `{_display(state.upstream)}`",
-        f"- Ahead / behind: `{_display(state.ahead_behind)}`",
+        f"- Branch: `{display_text(state.branch)}`",
+        f"- HEAD: `{display_text(state.head)}`",
+        f"- Upstream: `{display_text(state.upstream)}`",
+        f"- Ahead / behind: `{display_text(state.ahead_behind)}`",
         f"- Worktree: `{state.worktree}`",
         "",
         "### Working Tree Changes",
@@ -170,10 +152,10 @@ def _command_line(command: DeclaredCommand) -> str:
     if command.parse_error:
         return f"- `{command.source}`: unable to parse command declarations."
     assert command.invocation is not None
-    invocation = _display(command.invocation)
+    invocation = display_text(command.invocation)
     if command.target is None:
         return f"- `{invocation}`"
-    return f"- `{invocation}` → `{_display(command.target)}`"
+    return f"- `{invocation}` → `{display_text(command.target)}`"
 
 
 def _bounded_lines(
@@ -262,7 +244,7 @@ def _render_recent_commits(commits: tuple[RecentCommit, ...]) -> str | None:
 
 
 def _tree_line(entry: TreeEntry) -> str:
-    path = _display(entry.path)
+    path = display_text(entry.path)
     if entry.kind == "directory":
         return f"{path}/"
     if entry.kind == "symlink":
@@ -295,7 +277,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             "# Project Context",
             "",
             f"- Schema: `{SCHEMA}`",
-            f"- Repository: `{_display(os.fspath(state.repository))}`",
+            f"- Repository: `{display_text(os.fspath(state.repository))}`",
         )
     )
     commands_section, commands_truncated = _render_commands(project.commands)

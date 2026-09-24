@@ -974,6 +974,39 @@ def test_directory_tree_renders_linked_worktree_git_file(tmp_path: Path) -> None
     assert ".git/" not in lines
 
 
+@pytest.mark.parametrize("output_format", ["json", "json-compact"])
+def test_oversized_json_document_fails_closed_without_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    output_format: str,
+) -> None:
+    repo = _repository(tmp_path)
+    monkeypatch.setattr("context_loader.application.JSON_OUTPUT_LIMIT_BYTES", 256)
+
+    exit_code = main(["--repo", os.fspath(repo), "--format", output_format])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == "error: JSON output exceeded the 256 byte document limit\n"
+
+
+def test_markdown_ignores_the_json_document_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _repository(tmp_path)
+    monkeypatch.setattr("context_loader.application.JSON_OUTPUT_LIMIT_BYTES", 1)
+
+    assert main(["--repo", os.fspath(repo)]) == 0
+    captured = capsys.readouterr()
+
+    assert captured.err == ""
+    assert captured.out.startswith("# Project Context\n")
+
+
 def test_oversized_git_output_terminates_process_and_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

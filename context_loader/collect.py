@@ -992,6 +992,40 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
     return DirectoryTree(tuple(collected), truncated)
 
 
+def display_text(value: str) -> str:
+    r"""Render one filesystem or Git string as printable, encodable ASCII-safe text.
+
+    Backticks, lone surrogates produced by ``surrogateescape`` decoding, and every
+    other non-printable codepoint become ``\xNN``/``\uNNNN``/``\UNNNNNNNN`` escapes so
+    the character can cross the JSON and Markdown serialization boundaries intact.
+    """
+    rendered: list[str] = []
+    for character in value:
+        codepoint = ord(character)
+        if character == "`":
+            rendered.append(r"\x60")
+        elif 0xDC80 <= codepoint <= 0xDCFF:
+            rendered.append(f"\\x{codepoint - 0xDC00:02x}")
+        elif character.isprintable():
+            rendered.append(character)
+        elif codepoint <= 0xFF:
+            rendered.append(f"\\x{codepoint:02x}")
+        elif codepoint <= 0xFFFF:
+            rendered.append(f"\\u{codepoint:04x}")
+        else:
+            rendered.append(f"\\U{codepoint:08x}")
+    return "".join(rendered)
+
+
+def serialized_display_length(value: str) -> int:
+    """Return the UTF-8 byte size of ``value`` once escaped and JSON-serialized.
+
+    This is the exact bytes one ``nested_context`` entry costs, quotes included, so the
+    report budget is metered on emitted output rather than on raw path bytes.
+    """
+    return len(json.dumps(display_text(value), ensure_ascii=False).encode("utf-8"))
+
+
 def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
     """List nested AGENTS.md paths under a bounded, contents-blind directory scan.
 
@@ -1035,8 +1069,9 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
             if len(files) >= NESTED_AGENTS_MAX_FILES:
                 state["list_truncated"] = True
                 continue
-            name_bytes = len(path.encode("utf-8", errors="surrogateescape"))
-            name_bytes += 1 if files else 0
+            # Charge the array's two bracket bytes to the first entry, so the budget
+            # covers everything this list makes the document emit.
+            name_bytes = serialized_display_length(path) + (1 if files else 2)
             if reported_bytes + name_bytes > NESTED_AGENTS_MAX_LIST_BYTES:
                 state["list_truncated"] = True
                 continue

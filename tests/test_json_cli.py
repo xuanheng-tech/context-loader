@@ -794,6 +794,24 @@ def test_json_nested_context_sanitizes_undecodable_names(tmp_path: Path) -> None
     assert json.loads(compact.stdout)["nested_context"] == document["nested_context"]
 
 
+def test_undecodable_repository_root_is_markdown_only(tmp_path: Path) -> None:
+    """Pins the documented Limits carve-out: root paths are emitted verbatim, not escaped."""
+    root = tmp_path / os.fsdecode(b"xff-\xff-repo")
+    root.mkdir()
+    _git(root, "init", "--quiet", "--initial-branch=main")
+    (root / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+
+    markdown = _run(root)
+    json_document = _run(root, output_format="json")
+    compact = _run(root, output_format="json-compact")
+
+    assert markdown.returncode == 0
+    assert markdown.stdout.startswith(b"# Project Context\n")
+    assert json_document.returncode == compact.returncode == 1
+    assert json_document.stdout == b"" and compact.stdout == b""
+    assert json_document.stderr == b"error: context collection failed\n"
+
+
 def test_json_unreadable_directory_with_undecodable_name_still_renders(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     locked = repo / os.fsdecode(b"locked-\xff-dir")
@@ -813,10 +831,18 @@ def test_json_unreadable_directory_with_undecodable_name_still_renders(tmp_path:
     )
 
 
+def _emitted_nested_list_bytes(document: bytes) -> int:
+    """Measure the nested files array from the bytes the document actually emitted."""
+    files = json.loads(document)["nested_context"]["files"]
+    array = json.dumps(files, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    assert b'"nested_context":{"files":' + array + b',"list_truncated"' in document
+    return len(array)
+
+
 def test_json_nested_context_bytes_report_cap(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     for index in range(20):
-        directory = repo / ("d" + str(index).zfill(2) + ("x" * 250))
+        directory = repo / ("z" * 241 + str(index).zfill(2))
         directory.mkdir()
         (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
 
@@ -824,10 +850,138 @@ def test_json_nested_context_bytes_report_cap(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     nested = json.loads(result.stdout)["nested_context"]
-    # Each path is 263 bytes; the 4 KiB budget admits 15 (263 + 15 x 264 > 4096 > 14).
+    # Each 253-byte path serializes to 255, so 15 fit (257 + 14 x 256 = 3841 <= 4096) and a 16th
+    # would cost 4097. Metering raw bytes, or omitting the array's brackets, both admit 16 entries
+    # and emit a 4097-byte array over the declared cap.
     assert len(nested["files"]) == 15
     assert nested["list_truncated"] is True
     assert nested["scan_truncated"] is False
+    assert _emitted_nested_list_bytes(result.stdout) == 3841
+
+
+def test_json_nested_context_budget_counts_escaped_bytes(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    for index in range(20):
+        directory = repo / (f"{'`' * 200}{index:02d}")
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    nested = json.loads(result.stdout)["nested_context"]
+    # Escaping turns each backtick into \x60 and JSON then doubles each backslash, so a
+    # 212-byte path serializes to 1014 bytes. The budget admits 4
+    # (1016 + 3 x 1015 <= 4096 < 1016 + 4 x 1015) where pre-escape metering claimed 19.
+    assert len(nested["files"]) == 4
+    assert nested["list_truncated"] is True
+    assert nested["scan_truncated"] is False
+    assert all("\\x60" in path for path in nested["files"])
+    assert _emitted_nested_list_bytes(result.stdout) <= 4 * 1024
+
+
+def test_json_document_respects_its_bounds_on_a_stress_repository(tmp_path: Path) -> None:
+    from context_loader import application, collect
+    from context_loader.render import GLOBAL_OUTPUT_LIMIT_BYTES
+
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Instructions\n" + ("x" * 16 * 1024), encoding="utf-8")
+    (repo / "README.md").write_text("readme " * 3000, encoding="utf-8")
+    (repo / "package.json").write_text('{"name": "x"}\n', encoding="utf-8")
+    for index in range(40):
+        directory = repo / os.fsdecode(b"\xff" * 40) / f"component{index:03d}"
+        directory.mkdir(parents=True)
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+        (directory / "notes.txt").write_text("noise\n", encoding="utf-8")
+
+    markdown = _run(repo)
+    assert markdown.returncode == 0
+    assert len(markdown.stdout) <= GLOBAL_OUTPUT_LIMIT_BYTES
+
+    for output_format in ("json", "json-compact"):
+        result = _run(repo, output_format=output_format)
+        assert result.returncode == 0
+        assert len(result.stdout) <= application.JSON_OUTPUT_LIMIT_BYTES
+        nested = json.loads(result.stdout)["nested_context"]
+        assert _emitted_nested_list_bytes(result.stdout) <= collect.NESTED_AGENTS_MAX_LIST_BYTES
+        assert nested["list_truncated"] is True
+
+
+def test_json_nested_context_budget_holds_on_mixed_escape_density(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    shapes = (
+        "plain",
+        "`" * 60,
+        os.fsdecode(b"\xff" * 60),
+        "\x01" * 40,
+        'quote"back\\slash',
+    )
+    for index, shape in enumerate(shapes * 12):
+        directory = repo / f"{shape}{index:02d}"
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    nested = json.loads(result.stdout)["nested_context"]
+    assert nested["list_truncated"] is True
+    assert _emitted_nested_list_bytes(result.stdout) <= 4 * 1024
+
+
+def test_json_document_bound_is_enforced_on_the_exact_emitted_length(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from context_loader import application
+    from context_loader.git import ContextLoaderError
+
+    result = application.load_project_context(os.fspath(_repository(tmp_path)))
+    reference = application.render_json(result)
+
+    monkeypatch.setattr(application, "JSON_OUTPUT_LIMIT_BYTES", len(reference))
+    assert application.render_json(result) == reference
+
+    monkeypatch.setattr(application, "JSON_OUTPUT_LIMIT_BYTES", len(reference) - 1)
+    with pytest.raises(ContextLoaderError, match="JSON output exceeded the"):
+        application.render_json(result)
+    with pytest.raises(ContextLoaderError, match="JSON output exceeded the"):
+        application.render_json(result, compact=True)
+
+
+def test_json_nested_context_budget_uses_emitted_bytes_for_undecodable_names(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    for index in range(30):
+        directory = repo / os.fsdecode(b"\xff" * 200 + f"{index:02d}".encode())
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("rule\n", encoding="utf-8")
+
+    result = _run(repo, output_format="json")
+
+    assert result.returncode == 0
+    nested = json.loads(result.stdout)["nested_context"]
+    # 200 undecodable bytes escape to 800 characters and JSON doubles each escape backslash,
+    # so this 210-byte path serializes to 1012 and only 4 fit the budget
+    # (1014 + 3 x 1013 <= 4096) where pre-escape metering admitted 19.
+    assert len(nested["files"]) == 4
+    assert nested["list_truncated"] is True
+    assert _emitted_nested_list_bytes(result.stdout) <= 4 * 1024
+
+
+def test_readme_declares_the_enforced_output_bounds() -> None:
+    from context_loader import application
+    from context_loader.render import GLOBAL_OUTPUT_LIMIT_BYTES
+
+    readme = " ".join((PROJECT_ROOT / "README.md").read_text(encoding="utf-8").split())
+    # Each format's final bound is stated on its own terms; no single figure claims both.
+    assert f"Markdown stdout: {GLOBAL_OUTPUT_LIMIT_BYTES:,} bytes" in readme
+    assert application.JSON_OUTPUT_LIMIT_BYTES == 8 * 1024 * 1024
+    assert f"{application.JSON_OUTPUT_LIMIT_BYTES:,} bytes (8 MiB)" in readme
+    assert "JSON output exceeded the 8388608 byte document limit" in readme
+    assert "a 4 KiB budget metered on the emitted array" in readme
+    assert "- Final stdout:" not in readme
 
 
 def test_readme_example_and_help_match_emitted_schema_versions() -> None:

@@ -6,6 +6,30 @@ dates.
 
 ## Unreleased
 
+- Fixed: the nested `AGENTS.md` path report budget is metered on each path's final serializable
+  representation — escaped with the same display escaping the document emits, then measured as the
+  JSON string bytes actually written, including quoting, the array separator and, for the first
+  entry, the array's own brackets — instead of on pre-escape path bytes. Escape-dense names
+  (backticks, undecodable byte sequences) could previously make the emitted `nested_context.files`
+  carry several times the documented 4 KiB; the cap is now honest and `list_truncated` keeps its
+  meaning.
+- Added: `--format json` and `--format json-compact` enforce a bound on the final serialized
+  document (8,388,608 bytes including the trailing newline). The bound is fail-closed: an
+  over-budget repository exits 1 with an empty stdout and a one-line diagnostic rather than emitting
+  a document the declared contract cannot describe. The component budgets keep legitimate documents
+  far below it: the rendered `context` is capped at 98,304 bytes, repeated source bodies at 56 KiB
+  before escaping, and the status listing is bounded by the 300-entry directory tree and the 100
+  working-tree changes.
+- Docs: "Limits" now states a per-format final bound (Markdown 98,304 bytes; JSON and
+  JSON-compact 8 MiB serialized document) instead of one figure that only described Markdown, since
+  the machine formats legitimately carry the rendered context plus a second copy of every source
+  body and cannot share the Markdown cap. The same section now states the remaining asymmetry this
+  audit exposed and a new test pins it: `nested_context` paths and `statuses` subjects are escaped,
+  while `repository` and `sources[*].path` are emitted verbatim, so a repository root containing
+  bytes the filesystem could not decode renders as Markdown but makes `--format json` and
+  `--format json-compact` exit 1. Changing those two fields would alter published values under an
+  unchanged `schema_version`, so they stay as they are.
+
 ## 1.3.0
 
 - Changed: because the new top-level `nested_context` key changes the exact document shape, the JSON

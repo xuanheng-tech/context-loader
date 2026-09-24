@@ -23,15 +23,19 @@ from .collect import (
     NestedContextPresence,
     ProjectContext,
     collect_project_context,
+    display_text,
 )
 from .git import ContextLoaderError, collect_repository
-from .render import _display, render_markdown_with_details, rendered_source_contents
+from .render import render_markdown_with_details, rendered_source_contents
 
 # Each value names one exact document shape and is never reused: 1 and 2 are the
 # shapes published in release 1.2.0, so adding the nested_context object to both
 # formats moved the default document to 3 and the compact projection to 4.
 JSON_SCHEMA_VERSION = 3
 COMPACT_JSON_SCHEMA_VERSION = 4
+# Both machine formats share this final bound on the serialized document: output is
+# either valid JSON within it or a fail-closed error, never a truncated document.
+JSON_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
 TOOL_NAME = "context-loader"
 
 _STATUS_CODE_BY_MESSAGE = {
@@ -190,7 +194,7 @@ def _build_statuses(
     for entry in project.directory_tree.entries:
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
-            statuses.append(_status("unreadable", "tree_entry", _display(subject)))
+            statuses.append(_status("unreadable", "tree_entry", display_text(subject)))
 
     for title in omitted_sections:
         statuses.append(_status("section_omitted", "section", title))
@@ -305,6 +309,9 @@ def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes
     ``compact`` projects away the duplicated source bodies only at this
     boundary: statuses and context were computed from the full model at load
     time, so both documents agree on everything except ``sources[*].content``.
+
+    The bound is on the final serialized document: a repository whose evidence
+    cannot fit fails closed with no output rather than emitting a partial file.
     """
     document = {
         "schema_version": (COMPACT_JSON_SCHEMA_VERSION if compact else result.schema_version),
@@ -323,7 +330,7 @@ def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes
         "nested_context": {
             # Filesystem names arrive undecoded (surrogate-escaped); sanitize exactly like
             # tree/change paths so no raw byte can reach the UTF-8 document.
-            "files": [_display(path) for path in result.nested_context.files],
+            "files": [display_text(path) for path in result.nested_context.files],
             "list_truncated": result.nested_context.list_truncated,
             "scan_truncated": result.nested_context.scan_truncated,
         },
@@ -337,4 +344,9 @@ def render_json(result: ProjectContextResult, *, compact: bool = False) -> bytes
         sort_keys=True,
         separators=(",", ":"),
     )
-    return f"{serialized}\n".encode()
+    encoded = f"{serialized}\n".encode()
+    if len(encoded) > JSON_OUTPUT_LIMIT_BYTES:
+        raise ContextLoaderError(
+            f"JSON output exceeded the {JSON_OUTPUT_LIMIT_BYTES} byte document limit"
+        )
+    return encoded

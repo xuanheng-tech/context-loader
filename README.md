@@ -127,9 +127,10 @@ The output has no generated timestamp, AI summary, architecture inference, or di
 ## JSON Output
 
 `--format json` writes exactly one separator-compact UTF-8 JSON document plus one trailing newline
-to stdout. Keys are serialized in sorted order with `ensure_ascii=False`. `--format json-compact`
-uses the identical serialization; only the field set differs, as described under “Compact model
-consumption”. The declared contract for `--format json` is:
+to stdout, within the JSON document bound under “Limits”. Keys are serialized in sorted order
+with `ensure_ascii=False`. `--format json-compact` uses the identical serialization; only the field
+set differs, as described under “Compact model consumption”. The declared contract for
+`--format json` is:
 
 ```json
 {
@@ -197,11 +198,14 @@ no sizes, no mtimes and no contents. A symlinked (even dangling) `AGENTS.md` is 
 existence comes from the directory entry itself; the scan never resolves what it points at. Any
 `.git`, `.venv`, `venv`, `node_modules` or `site-packages` directory is skipped at every depth:
 package-manager and interpreter-managed trees are not authored repository instructions.
-`list_truncated` means more matching entries exist beyond the report caps (32 paths and 4 KiB of
-path bytes); `scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or
-a directory or entry could not be read, so absence of a path is not proof of absence of the file.
-Paths are sanitized with the same escaping the Markdown uses for repository-derived text, so the
-document is always valid UTF-8. The corresponding
+`list_truncated` means more matching entries exist beyond the report caps: 32 paths, and a 4 KiB
+budget metered on the emitted array itself — each path's escaped, JSON-serialized string plus its
+separator, with the array's brackets charged to the first entry — so the value never costs more
+than the budget it declares. `scan_truncated` means the depth (4) or directory-count (2,000) budget
+was reached, or a directory or entry could not be read, so absence of a path is not proof of absence
+of the file. Nested paths are sanitized with the same escaping the Markdown uses for
+repository-derived text, so a nested name the filesystem could not decode never breaks the document;
+see “Limits” for the root paths that are emitted verbatim. The corresponding
 `nested_agents_list_truncated` and `nested_agents_scan_truncated` status entries mirror both flags.
 Presence is not instruction: whether a nested file applies, and its text, remain the caller's
 judgment; Markdown output is unchanged.
@@ -286,7 +290,21 @@ scan that ends before EOF still reports the characters it could not select.
 
 ## Limits
 
-- Final stdout: 98,304 bytes
+Final output bounds differ per format. The two stdout bounds below are enforced on the bytes written
+to stdout and the nested report cap on the bytes the document emits for that array; every other
+bullet is a per-component, read or capture bound, as each one states:
+
+- Markdown stdout: 98,304 bytes. A section that cannot fit is replaced by an omission notice, and so
+  is every later section, so the limit holds without cutting a section mid-body.
+- JSON and JSON-compact stdout: 8,388,608 bytes (8 MiB) for the serialized document, including its
+  trailing newline. This bound is fail-closed: if a repository's evidence cannot fit, the tool exits
+  1, writes nothing to stdout and prints `error: JSON output exceeded the 8388608 byte document
+  limit`. It never emits a truncated document. The component budgets below keep legitimate
+  documents far inside it, so it is a final backstop rather than an expected truncation point.
+- Component budgets below are metered on the Markdown `context` content, and that same string is the
+  JSON `context` value; because JSON escaping expands quotes, backslashes and control characters,
+  the serialized bytes can be several times larger. The JSON document also repeats the source
+  bodies, so no single component figure bounds JSON stdout.
 - `AGENTS.md`: 256-KiB bounded source scan; selected source plus selection audit remains at most
   16 KiB, including a 4-KiB maximum small head
 - `README.md`: 16 KiB
@@ -294,10 +312,14 @@ scan that ends before EOF still reports the characters it could not select.
 - All entry-file bodies: 24 KiB
 - Declared commands: 8 KiB
 - Directory tree: 12 KiB, 300 entries, and depth 2
-- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, and at most 32 reported paths;
-  file contents are never read
+- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths and
+  a 4 KiB budget metered on the emitted array; file contents are never read
 - Working-tree changes: 100 paths and 4 KiB
 - Recent commits: 8
+- JSON-only listings have no byte budget of their own: `statuses` subjects are escaped names bounded
+  by the entry counts above, while `repository` and `sources[*].path` are emitted verbatim, so a
+  repository root the filesystem could not decode makes the machine formats exit 1 where Markdown
+  still renders
 - Git subprocess output: 16 MiB (bounded while reading)
 - Candidate file validation: 16 MiB hard read bound
 
