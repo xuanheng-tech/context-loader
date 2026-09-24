@@ -13,8 +13,9 @@ dates.
   JSON string bytes actually written, including quoting, the array separator and, for the first
   entry, the array's own brackets — instead of on pre-escape path bytes. Escape-dense names
   (backticks, undecodable byte sequences) could previously make the emitted `nested_context.files`
-  carry several times the documented 4 KiB; the cap is now honest and `list_truncated` keeps its
-  meaning.
+  carry several times the documented 4 KiB; a name sitting exactly on the boundary can also admit
+  one entry fewer now that the quoting is counted. Both are value changes for that one field: no key
+  set changes, so `schema_version` stays 3/4, and `list_truncated` keeps its meaning.
 - Added: `--format json` and `--format json-compact` enforce a bound on the final serialized
   document (8,388,608 bytes including the trailing newline). The bound is fail-closed: an
   over-budget repository exits 1 with an empty stdout and a one-line diagnostic rather than emitting
@@ -31,8 +32,12 @@ dates.
   audit exposed and a new test pins it: `nested_context` paths and `statuses` subjects are escaped,
   while `repository` and `sources[*].path` are emitted verbatim, so a repository root containing
   bytes the filesystem could not decode renders as Markdown but makes `--format json` and
-  `--format json-compact` exit 1. Changing those two fields would alter published values under an
-  unchanged `schema_version`, so they stay as they are.
+  `--format json-compact` exit 1. Escaping those two fields is a separate published-value change
+  with its own consumer impact, so it is deliberately not folded into this budget correction.
+- Preserve: Markdown bytes, the default format, every flag and exit code other than the new
+  over-budget JSON case, `schema_version` 3 and 4, `contract_version` 3, the collection scope and the
+  Authority Boundary are unchanged; on ordinary repositories all three formats produce the same
+  bytes as 1.3.0.
 
 ## 1.3.0
 
