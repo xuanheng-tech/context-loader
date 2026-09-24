@@ -189,7 +189,7 @@ only `repository` sources and does not add any global-file discovery.
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
 target path. Existing per-source fields remain unchanged; the document's exact key
-set (now including `nested_context`) is named by its `schema_version`, described below.
+set (which includes `nested_context`) is named by its `schema_version`, described below.
 
 `nested_context` is always present and existence-only: `files` lists repository-relative paths of
 non-directory `AGENTS.md` entries under subdirectories, found by a bounded scan that enumerates
@@ -236,7 +236,7 @@ not otherwise change default Markdown bytes, exit codes or determinism.
 
 One historical exception is acknowledged: releases 1.0.0 and 1.1.0 both emitted `schema_version` 1
 although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward each emitted number
-names exactly one key set, and the `nested_context` renumber below enforces that rule going forward.
+names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
 for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.1`. Version 1

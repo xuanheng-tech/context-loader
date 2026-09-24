@@ -6,6 +6,14 @@ dates.
 
 ## Unreleased
 
+- Docs: tighten the release-notes claims that a post-release audit could not reproduce from the
+  published artifacts. The 1.3.1 "Preserve" note is exact only for Markdown: `--format json` and
+  `--format json-compact` embed `tool.version`, so their bytes differ from 1.3.0 by that one string,
+  while every remaining field — including each real repository's `nested_context` path list —
+  matched 1.3.0 byte for byte (measured on seven repositories). Two README sentences that described
+  the document key set and the version renumbering relative to 1.2.0 are restated version-neutrally,
+  since a reader of 1.3.1 cannot resolve "now" or "below" from the shipped text.
+
 ## 1.3.1
 
 - Fixed: the nested `AGENTS.md` path report budget is metered on each path's final serializable
