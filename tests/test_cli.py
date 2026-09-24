@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"project-context 1.3.0\n"
+    assert result.stdout == b"project-context 1.3.1\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.3.0"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.3.1"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "project-context").read_text(encoding="utf-8") == (
@@ -1072,7 +1072,7 @@ def test_oversized_repository_file_in_json_is_omitted_from_sources(
     assert exit_code == 0
     document = json.loads(captured.out)
     assert document["tool"]["name"] == "context-loader"
-    assert document["tool"]["version"] == "1.3.0"
+    assert document["tool"]["version"] == "1.3.1"
     assert not any(source["kind"] == "agents" for source in document["sources"])
     assert "Skipped: unreadable." in document["context"]
 

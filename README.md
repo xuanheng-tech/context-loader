@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.1**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.0'
+uv tool install 'context-loader==1.3.1'
 ```
 
 ```bash
-pip install 'context-loader==1.3.0'
+pip install 'context-loader==1.3.1'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.0`. Install its matching published release or an exact source commit.
+Source version: `1.3.1`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.0'
+uv tool install 'context-loader==1.3.1'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.0'
+pip install 'context-loader==1.3.1'
 ```
 
-For development or source-based installs tracking current repository (`1.3.0`):
+For development or source-based installs tracking current repository (`1.3.1`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -137,7 +137,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.0"
+    "version": "1.3.1"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -237,7 +237,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and the `nested_context` renumber below enforces that rule going forward.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.0`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.1`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -300,7 +300,9 @@ bullet is a per-component, read or capture bound, as each one states:
   trailing newline. This bound is fail-closed: if a repository's evidence cannot fit, the tool exits
   1, writes nothing to stdout and prints `error: JSON output exceeded the 8388608 byte document
   limit`. It never emits a truncated document. The component budgets below keep legitimate
-  documents far inside it, so it is a final backstop rather than an expected truncation point.
+  documents far inside it — the largest escape-dense repository audited for this release emitted
+  263 KiB, of which 248 KiB was escaped `statuses` subjects — so it is a final backstop rather
+  than an expected truncation point.
 - Component budgets below are metered on the Markdown `context` content, and that same string is the
   JSON `context` value; because JSON escaping expands quotes, backslashes and control characters,
   the serialized bytes can be several times larger. The JSON document also repeats the source
@@ -356,7 +358,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.0 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.1 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
