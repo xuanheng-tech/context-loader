@@ -39,12 +39,17 @@ dates.
   count, the limit that was applied and up to three example names, and by at most eight
   `directory_listing_incomplete` `statuses` entries naming individual directories plus one aggregate
   entry giving the totals when more were capped than are named individually; a capped directory
-  beyond the retained examples is counted, not silently dropped. Previously each capped directory
-  produced its own unbounded note outside any budget, which reached 12,973 bytes of section on a
-  120-capped-directory fixture where 1.3.1 emitted 4,848 for the same tree. The note is now charged
-  against the 12 KiB listing budget before the body is cut, so the claim cannot inflate the section,
-  and its cost is paid in listing bytes rather than capped at one line. The heading and fence lines
-  remain unmetered, as they were in 1.3.1. Internal counting and deduplication use the raw directory
+  beyond the retained examples is counted rather than silently dropped, counting the capped
+directories the listing reached: a directory is reached only when its parent offered it inside that
+parent's own alphabetical prefix and kept it, so capped siblings displaced by the entry budget are
+disclosed through their parent's truncation rather than as separate numbers. Previously each capped directory
+  produced its own unbounded note outside any budget. Measured on one reproducible fixture of 120
+  directories each holding 513 entries, the `## Directory Tree` section was 3,058 bytes on 1.3.1
+  (no notes), 16,622 bytes with 120 notes on 7562d86 -- 4,334 bytes past the 12 KiB it documents --
+  and is 2,990 bytes with one note on this revision. The note is now charged against the 12 KiB
+  listing budget before the body is cut, so the claim cannot inflate the section, and its cost is
+  paid in listing bytes rather than capped at one line. The heading and fence lines remain unmetered,
+  as they were in 1.3.1. Internal counting and deduplication use the raw directory
   path and the aggregate carries an explicit identity, because display escaping is not injective: a
   directory named `` ` `` and one named `\x60` render identically and must stay two facts. A
   directory above the nested-scan cap sets the existing `scan_truncated` flag and

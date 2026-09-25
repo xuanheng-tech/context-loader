@@ -358,6 +358,52 @@ def test_note_grammar_matches_a_single_or_several_unnamed_directories(
     assert aggregate[0]["subject"].endswith("1 further directory not named individually")
 
 
+def test_incomplete_total_covers_the_capped_directories_the_listing_reached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported count is what was observed, and the shortfall is still disclosed.
+
+    400 capped directories exist, but the 300-entry budget never reaches them all: a directory
+    is only examined once its parent offered it and kept it. Reporting 400 would claim knowledge
+    the collector does not have, and reporting nothing about the rest would hide the shortfall,
+    so the count must stay at the reached set while the entry budget reports the remainder.
+    """
+    cap = 3
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    total = 400
+    for index in range(total):
+        directory = repo / f"d{index:03d}"
+        directory.mkdir()
+        for inner in range(cap + 1):
+            (directory / f"e{inner}.txt").write_text("x\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    notes = [line for line in result.context.splitlines() if line.startswith("Listing incomplete:")]
+    per_directory = _per_directory_statuses(document)
+    aggregate = _aggregate_statuses(document)
+
+    assert len(notes) == 1
+    reported = int(notes[0].split("Listing incomplete: ")[1].split(" ")[0])
+    assert reported < total, "the count must be what was reached, not what exists"
+    # The count always reconciles with the machine channel: named entries, plus the aggregate's
+    # own remainder when more were reached than are named individually.
+    if aggregate:
+        unnamed = int(aggregate[0]["subject"].split(";")[1].split(" ")[1])
+        assert reported == len(per_directory) + unnamed
+        assert aggregate[0]["subject"].startswith(f"{reported} directories exceeded")
+    else:
+        assert reported == len(per_directory) <= 8
+    # Whatever was never reached is still disclosed, as the parent's own truncation.
+    assert {
+        "code": "truncated",
+        "subject_kind": "tree",
+        "subject": "Directory Tree",
+    } in document["statuses"]
+    assert result.context.count("Listing incomplete:") == 1
+
+
 def test_capped_directories_beyond_the_example_limit_report_an_aggregate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

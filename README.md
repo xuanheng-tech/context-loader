@@ -323,7 +323,10 @@ bullet is a per-component, read or capture bound, as each one states:
   eight `directory_listing_incomplete` status entries naming individual directories plus one
   aggregate entry giving the totals when more directories were capped than are named: beyond the
   retained examples a capped directory is counted but not individually named, and no listing
-  claims completeness it does not have.
+  claims completeness it does not have. That total covers the capped directories the listing
+  reached: a directory is reached only when its parent offered it inside the parent's own
+  alphabetical prefix and the entry budget kept it, so capped siblings displaced by the budget are
+  disclosed as their parent's truncation rather than as separate numbers.
   Three limits act in sequence and a name survives only if all three leave room. The 512-entry
   enumeration limit decides which names a directory offers at all; above it only an alphabetical
   prefix is ever seen. The 300-entry item budget, split between a directory's subdirectories and
