@@ -184,7 +184,7 @@ context, in assembly order, after the existing newline normalization and truncat
 distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
 only `repository` sources and does not add any global-file discovery.
 
-`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
+`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, directory-tree entries whose directory holds more entries than one enumeration examines, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. A skipped or absent source reports the code of the condition the collector observed (`not_present`, `skipped_symlink`, `skipped_not_regular`, `skipped_encoding`, `skipped_unreadable`); the sentence in `context` is rendered from that same condition, so wording and code cannot drift apart. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
@@ -203,8 +203,9 @@ budget metered on the emitted array itself — each path's escaped, JSON-seriali
 separator, with the array's brackets charged to the first entry — so the emitted array never costs
 more than the budget it declares. Because quoting is counted, an array already near the cap can
 report one path fewer than an older release did, and then says so through `list_truncated`.
-`scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, or a directory
-or entry could not be read, so absence of a path is not proof of absence of the file. Nested paths
+`scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, a directory
+held more entries than one enumeration examines (1,024), or a directory or entry could not be
+read, so absence of a path is not proof of absence of the file. Nested paths
 are sanitized with the same escaping the Markdown uses for repository-derived text, so a nested name
 the filesystem could not decode never breaks the document;
 see “Limits” for the root paths that are emitted verbatim. The corresponding
@@ -315,9 +316,16 @@ bullet is a per-component, read or capture bound, as each one states:
 - Each entry file: 8 KiB
 - All entry-file bodies: 24 KiB
 - Declared commands: 8 KiB
-- Directory tree: 12 KiB, 300 entries, and depth 2
-- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths and
-  a 4 KiB budget metered on the emitted array; file contents are never read
+- Directory tree: 12 KiB, 300 entries, and depth 2. Each directory is enumerated up to 512
+  entries, keeping the alphabetically first names so the listing never depends on operating
+  system order; a directory that holds more is named by a `Listing incomplete:` line after the
+  listing and a `directory_listing_incomplete` status entry, so a partial listing is never
+  presented as a complete one. A directory's own entries are listed before any of its
+  subdirectories are descended into, and its own files keep a share of the item budget, so a
+  root `README.md` is not displaced by hundreds of top-level directories.
+- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths, a
+  4 KiB budget metered on the emitted array, and at most 1,024 entries examined per directory;
+  file contents are never read
 - Working-tree changes: 100 paths and 4 KiB
 - Recent commits: 8
 - JSON-only listings have no byte budget of their own: `statuses` subjects are escaped names bounded

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import codecs
-import errno
 import json
 import os
 import re
@@ -14,41 +12,45 @@ from bisect import bisect_right
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
-AGENTS_LIMIT_BYTES = 16 * 1024
-AGENTS_HEAD_LIMIT_BYTES = 4 * 1024
-AGENTS_SCAN_LIMIT_BYTES = 256 * 1024
-AGENTS_FOCUS_LIMIT_BYTES = 1024
-AGENTS_PATH_LIMIT_BYTES = 1024
-README_LIMIT_BYTES = 16 * 1024
-ENTRY_FILE_LIMIT_BYTES = 8 * 1024
-ENTRY_FILES_TOTAL_LIMIT_BYTES = 24 * 1024
-DECLARED_COMMANDS_LIMIT_BYTES = 8 * 1024
-DIRECTORY_TREE_LIMIT_BYTES = 12 * 1024
-DIRECTORY_TREE_MAX_ITEMS = 300
-DIRECTORY_TREE_MAX_DEPTH = 2
-NESTED_AGENTS_MAX_DEPTH = 4
-NESTED_AGENTS_MAX_DIRECTORIES = 2_000
-NESTED_AGENTS_MAX_FILES = 32
-NESTED_AGENTS_MAX_LIST_BYTES = 4 * 1024
-NESTED_AGENTS_EXCLUDED_DIRECTORIES = frozenset(
-    {".git", ".venv", "node_modules", "site-packages", "venv"}
+from .filesystem import (
+    enumerate_directory,
+    open_bounded_regular_file,
+    open_child_directory,
+    open_directory,
+    read_validated_text,
+    serialized_display_length,
 )
-FILE_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
-MAX_FILE_SCAN_BYTES = FILE_SCAN_LIMIT_BYTES
-TRUNCATION_MARKER = "… truncated by context-loader …"
-
-NOT_PRESENT = "Not present."
-SKIPPED_SYMLINK = "Skipped: symlink."
-SKIPPED_NOT_REGULAR = "Skipped: not a regular file."
-SKIPPED_ENCODING = "Skipped: unsupported text encoding."
-SKIPPED_UNREADABLE = "Skipped: unreadable."
-
-ENTRY_FILE_SPECS = (
-    ("pyproject.toml", "toml"),
-    ("package.json", "json"),
-    ("Makefile", "make"),
-    ("Cargo.toml", "toml"),
-    ("go.mod", "text"),
+from .model import (
+    AGENTS_FOCUS_LIMIT_BYTES,
+    AGENTS_HEAD_LIMIT_BYTES,
+    AGENTS_LIMIT_BYTES,
+    AGENTS_PATH_LIMIT_BYTES,
+    AGENTS_SCAN_LIMIT_BYTES,
+    DIRECTORY_TREE_MAX_DEPTH,
+    DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
+    DIRECTORY_TREE_MAX_ITEMS,
+    ENTRY_FILE_LIMIT_BYTES,
+    ENTRY_FILE_SPECS,
+    FILE_SCAN_LIMIT_BYTES,
+    NESTED_AGENTS_EXCLUDED_DIRECTORIES,
+    NESTED_AGENTS_MAX_DEPTH,
+    NESTED_AGENTS_MAX_DIRECTORIES,
+    NESTED_AGENTS_MAX_ENTRIES_PER_DIRECTORY,
+    NESTED_AGENTS_MAX_FILES,
+    NESTED_AGENTS_MAX_LIST_BYTES,
+    README_LIMIT_BYTES,
+    AgentsSectionAuditEntry,
+    AgentsSelectionAudit,
+    AgentsSelectionInputError,
+    Availability,
+    CollectedFile,
+    DeclaredCommand,
+    DirectoryTree,
+    MarkdownSection,
+    MarkdownSectionParseError,
+    NestedContextPresence,
+    ProjectContext,
+    TreeEntry,
 )
 
 _JUST_RECIPE_RE = re.compile(
@@ -121,99 +123,6 @@ _SELECTION_REASON_ORDER = (
     "parent_context",
     "budget_fallback",
 )
-
-
-class AgentsSelectionInputError(ValueError):
-    """Raised when optional AGENTS selection inputs exceed the bounded contract."""
-
-
-class MarkdownSectionParseError(ValueError):
-    """Raised when Markdown headings cannot be parsed safely."""
-
-
-@dataclass(frozen=True, slots=True)
-class MarkdownSection:
-    heading: str
-    heading_level: int
-    start: int
-    end: int
-    text: str
-    normalized_heading: str
-    parent_index: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class AgentsSectionAuditEntry:
-    heading: str
-    heading_level: int
-    reasons: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AgentsSelectionAudit:
-    source: str
-    selected_sections: tuple[AgentsSectionAuditEntry, ...]
-    indexed_only_sections: tuple[AgentsSectionAuditEntry, ...]
-    chars_selected: int
-    chars_omitted: int
-    truncated: bool
-    parse_fallback: bool = False
-    source_scan_truncated: bool = False
-    index_truncated: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class CollectedFile:
-    name: str
-    language: str
-    status: str | None
-    content: str = ""
-    truncated: bool = False
-    selection: AgentsSelectionAudit | None = None
-    source_characters: int = 0
-
-    @property
-    def is_text(self) -> bool:
-        return self.status is None
-
-
-@dataclass(frozen=True, slots=True)
-class DeclaredCommand:
-    source: str
-    invocation: str | None = None
-    target: str | None = None
-    parse_error: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class TreeEntry:
-    path: str
-    kind: str
-
-
-@dataclass(frozen=True, slots=True)
-class DirectoryTree:
-    entries: tuple[TreeEntry, ...]
-    truncated: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class NestedContextPresence:
-    """Existence-only index of nested AGENTS.md files; their contents are never read."""
-
-    files: tuple[str, ...]
-    list_truncated: bool = False
-    scan_truncated: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectContext:
-    instructions: CollectedFile
-    overview: CollectedFile
-    entry_files: tuple[CollectedFile, ...]
-    commands: tuple[DeclaredCommand, ...]
-    directory_tree: DirectoryTree
-    nested_context: NestedContextPresence
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,7 +504,7 @@ def _bounded_head_fallback(source: CollectedFile, *, parse_fallback: bool) -> Co
     return CollectedFile(
         source.name,
         source.language,
-        None,
+        Availability.PRESENT,
         content,
         audit.truncated,
         audit,
@@ -671,128 +580,55 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
     return CollectedFile(
         source.name,
         source.language,
-        None,
+        Availability.PRESENT,
         content,
         audit.truncated,
         audit,
     )
 
 
-def _append_normalized_character(
-    capture: bytearray,
-    character: str,
-    limit: int,
-) -> bool:
-    encoded = character.encode()
-    if len(capture) + len(encoded) > limit:
-        return False
-    capture.extend(encoded)
-    return True
-
-
-def _read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, str | None, int]:
-    """Capture a bounded normalized prefix and count the whole normalized source."""
-    decoder = codecs.getincrementaldecoder("utf-8")("strict")
-    capture = bytearray()
-    last_line_boundary = 0
-    overflow = False
-    pending_carriage_return = False
-    source_characters = 0
-
-    def append(character: str) -> None:
-        nonlocal last_line_boundary, overflow
-        if overflow:
-            return
-        if not _append_normalized_character(capture, character, limit):
-            overflow = True
-            return
-        if character == "\n":
-            last_line_boundary = len(capture)
-
-    def consume(decoded: str) -> None:
-        nonlocal pending_carriage_return, source_characters
-        for character in decoded:
-            if pending_carriage_return:
-                pending_carriage_return = False
-                source_characters += 1
-                append("\n")
-                if character == "\n":
-                    continue
-            if character == "\r":
-                pending_carriage_return = True
-                continue
-            source_characters += 1
-            append(character)
-
-    total_bytes_read = 0
-    try:
-        while True:
-            raw = os.read(file_descriptor, 64 * 1024)
-            if not raw:
-                break
-            total_bytes_read += len(raw)
-            if total_bytes_read > FILE_SCAN_LIMIT_BYTES:
-                return "", False, SKIPPED_UNREADABLE, 0
-            if b"\0" in raw:
-                return "", False, SKIPPED_ENCODING, 0
-            consume(decoder.decode(raw, final=False))
-        consume(decoder.decode(b"", final=True))
-        if pending_carriage_return:
-            source_characters += 1
-            append("\n")
-    except UnicodeDecodeError:
-        return "", False, SKIPPED_ENCODING, 0
-    except OSError:
-        return "", False, SKIPPED_UNREADABLE, 0
-
-    if overflow:
-        del capture[last_line_boundary:]
-    return capture.decode("utf-8"), overflow, None, source_characters
-
-
 def _collect_root_file(root: Path, name: str, language: str, limit: int) -> CollectedFile:
+    """Read one bounded root candidate and record why it is usable or unusable.
+
+    Each availability reason is set at the moment its condition is observed, so the
+    machine code and the displayed sentence can never drift apart.
+    """
     if len(Path(name).parts) != 1 or Path(name).name != name:
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
+        return CollectedFile(name, language, Availability.UNREADABLE)
     path = root / name
     if path.parent != root:
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
+        return CollectedFile(name, language, Availability.UNREADABLE)
     try:
         metadata = path.lstat()
     except FileNotFoundError:
-        return CollectedFile(name, language, NOT_PRESENT)
+        return CollectedFile(name, language, Availability.NOT_PRESENT)
     except OSError:
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
+        return CollectedFile(name, language, Availability.UNREADABLE)
     if stat.S_ISLNK(metadata.st_mode):
-        return CollectedFile(name, language, SKIPPED_SYMLINK)
+        return CollectedFile(name, language, Availability.SYMLINK)
     if not stat.S_ISREG(metadata.st_mode):
-        return CollectedFile(name, language, SKIPPED_NOT_REGULAR)
+        return CollectedFile(name, language, Availability.NOT_REGULAR)
     if metadata.st_size > FILE_SCAN_LIMIT_BYTES:
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
+        return CollectedFile(name, language, Availability.UNREADABLE)
 
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    file_descriptor, reason = open_bounded_regular_file(path)
+    if reason is not Availability.PRESENT:
+        return CollectedFile(name, language, reason)
     try:
-        file_descriptor = os.open(path, flags)
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            return CollectedFile(name, language, SKIPPED_SYMLINK)
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
-    try:
-        stat_result = os.fstat(file_descriptor)
-        if not stat.S_ISREG(stat_result.st_mode):
-            return CollectedFile(name, language, SKIPPED_NOT_REGULAR)
-        if stat_result.st_size > FILE_SCAN_LIMIT_BYTES:
-            return CollectedFile(name, language, SKIPPED_UNREADABLE)
-        content, truncated, error_status, source_characters = _read_validated_text(
+        content, truncated, read_reason, source_characters = read_validated_text(
             file_descriptor, limit
         )
-    except OSError:
-        return CollectedFile(name, language, SKIPPED_UNREADABLE)
     finally:
         os.close(file_descriptor)
-    if error_status is not None:
-        return CollectedFile(name, language, error_status)
+    if read_reason is not Availability.PRESENT:
+        return CollectedFile(name, language, read_reason)
     return CollectedFile(
-        name, language, None, content, truncated, source_characters=source_characters
+        name,
+        language,
+        Availability.PRESENT,
+        content,
+        truncated,
+        source_characters=source_characters,
     )
 
 
@@ -905,125 +741,102 @@ def _collect_commands(entry_files: tuple[CollectedFile, ...]) -> tuple[DeclaredC
     return tuple(commands)
 
 
-class _TreeLimitReached(Exception):
-    pass
+def _entry_slots(directories: int, others: int, remaining: int) -> tuple[int, int]:
+    """Split one directory's remaining item budget between its own two entry groups.
 
-
-def _classify_entries(
-    file_descriptor: int,
-) -> tuple[list[os.DirEntry[str]], list[os.DirEntry[str]]]:
-    with os.scandir(file_descriptor) as iterator:
-        scanned = list(iterator)
-    directories: list[os.DirEntry[str]] = []
-    others: list[os.DirEntry[str]] = []
-    for entry in scanned:
-        try:
-            is_directory = entry.is_dir(follow_symlinks=False) and not entry.is_symlink()
-        except OSError:
-            is_directory = False
-        (directories if is_directory else others).append(entry)
-    directories.sort(key=lambda entry: entry.name)
-    others.sort(key=lambda entry: entry.name)
-    return directories, others
+    When both groups cannot fit, each may take up to half of what remains before the
+    other claims the leftover, so a directory's own files are never crowded out entirely
+    by its alphabetically-earlier subdirectories.
+    """
+    budget = max(0, remaining)
+    if directories + others <= budget:
+        return directories, others
+    half = budget // 2
+    directory_slots = min(directories, half)
+    other_slots = min(others, budget - directory_slots)
+    return min(budget - other_slots, directories), other_slots
 
 
 def _collect_directory_tree(root: Path) -> DirectoryTree:
+    """List one repository tree root-first, with a bounded and honest enumeration.
+
+    A directory's own entries are listed before any of its subdirectories is descended
+    into, so the repository's top-level files cannot be displaced by deep or
+    alphabetically-early sibling directories. Every directory is enumerated under a
+    per-directory entry cap, and a directory that holds more entries than that cap is
+    recorded as incomplete rather than presented as fully listed.
+    """
     collected: list[TreeEntry] = []
+    incomplete: list[str] = []
     truncated = False
 
-    def add(entry: TreeEntry) -> None:
+    def add(entry_path: str, kind: str) -> int | None:
         nonlocal truncated
         if len(collected) >= DIRECTORY_TREE_MAX_ITEMS:
             truncated = True
-            raise _TreeLimitReached
-        collected.append(entry)
+            return None
+        collected.append(TreeEntry(entry_path, kind))
+        return len(collected) - 1
 
     def relative(prefix: str, name: str) -> str:
         return f"{prefix}/{name}" if prefix else name
 
+    def mark_unreadable(index: int, entry_path: str) -> None:
+        collected[index] = TreeEntry(entry_path, "unreadable_directory")
+
     def walk(file_descriptor: int, prefix: str, depth: int) -> None:
-        directories, others = _classify_entries(file_descriptor)
-        for entry in directories:
+        nonlocal truncated
+        listing = enumerate_directory(file_descriptor, DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY)
+        if listing.capped:
+            # A capped enumeration always leaves entries unlisted, even when the item
+            # budget itself was not the binding limit.
+            incomplete.append(prefix)
+            truncated = True
+        directories = [entry for entry in listing.entries if entry.is_directory]
+        others = [entry for entry in listing.entries if not entry.is_directory]
+        directory_slots, other_slots = _entry_slots(
+            len(directories), len(others), DIRECTORY_TREE_MAX_ITEMS - len(collected)
+        )
+        if directory_slots < len(directories) or other_slots < len(others):
+            truncated = True
+        descent: list[tuple[str, str, int]] = []
+        for entry in directories[:directory_slots]:
             entry_path = relative(prefix, entry.name)
             if depth == 0 and entry.name == ".git":
-                add(TreeEntry(entry_path, "directory"))
+                add(entry_path, "directory")
                 continue
-            if depth + 1 >= DIRECTORY_TREE_MAX_DEPTH:
-                add(TreeEntry(entry_path, "directory"))
+            index = add(entry_path, "directory")
+            if index is None or depth + 1 >= DIRECTORY_TREE_MAX_DEPTH:
                 continue
-            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+            descent.append((entry.name, entry_path, index))
+        for entry in others[:other_slots]:
+            add(relative(prefix, entry.name), "symlink" if entry.is_symlink else "file")
+        for name, entry_path, index in descent:
             try:
-                child_descriptor = os.open(entry.name, flags, dir_fd=file_descriptor)
+                child_descriptor = open_child_directory(file_descriptor, name)
             except OSError:
-                add(TreeEntry(entry_path, "unreadable_directory"))
+                mark_unreadable(index, entry_path)
                 continue
             try:
-                directory_index = len(collected)
-                add(TreeEntry(entry_path, "directory"))
-                try:
-                    walk(child_descriptor, entry_path, depth + 1)
-                except OSError:
-                    collected[directory_index] = TreeEntry(entry_path, "unreadable_directory")
+                walk(child_descriptor, entry_path, depth + 1)
+            except OSError:
+                mark_unreadable(index, entry_path)
             finally:
                 os.close(child_descriptor)
-        for entry in others:
-            entry_path = relative(prefix, entry.name)
-            try:
-                kind = "symlink" if entry.is_symlink() else "file"
-            except OSError:
-                kind = "file"
-            add(TreeEntry(entry_path, kind))
 
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        root_descriptor = os.open(root, flags)
+        root_descriptor = open_directory(root)
     except OSError:
         return DirectoryTree((TreeEntry("", "unreadable_directory"),))
     try:
         try:
             walk(root_descriptor, "", 0)
-        except _TreeLimitReached:
-            pass
         except OSError:
             if not collected:
                 collected.append(TreeEntry("", "unreadable_directory"))
     finally:
         os.close(root_descriptor)
-    return DirectoryTree(tuple(collected), truncated)
-
-
-def display_text(value: str) -> str:
-    r"""Render one filesystem or Git string as printable, encodable ASCII-safe text.
-
-    Backticks, lone surrogates produced by ``surrogateescape`` decoding, and every
-    other non-printable codepoint become ``\xNN``/``\uNNNN``/``\UNNNNNNNN`` escapes so
-    the character can cross the JSON and Markdown serialization boundaries intact.
-    """
-    rendered: list[str] = []
-    for character in value:
-        codepoint = ord(character)
-        if character == "`":
-            rendered.append(r"\x60")
-        elif 0xDC80 <= codepoint <= 0xDCFF:
-            rendered.append(f"\\x{codepoint - 0xDC00:02x}")
-        elif character.isprintable():
-            rendered.append(character)
-        elif codepoint <= 0xFF:
-            rendered.append(f"\\x{codepoint:02x}")
-        elif codepoint <= 0xFFFF:
-            rendered.append(f"\\u{codepoint:04x}")
-        else:
-            rendered.append(f"\\U{codepoint:08x}")
-    return "".join(rendered)
-
-
-def serialized_display_length(value: str) -> int:
-    """Return the UTF-8 byte size of ``value`` once escaped and JSON-serialized.
-
-    This is the exact bytes one ``nested_context`` entry costs, quotes included, so the
-    report budget is metered on emitted output rather than on raw path bytes.
-    """
-    return len(json.dumps(display_text(value), ensure_ascii=False).encode("utf-8"))
+    return DirectoryTree(tuple(collected), truncated, tuple(sorted(incomplete)))
 
 
 def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
@@ -1047,22 +860,23 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
             return
         state["directories"] += 1
         try:
-            with os.scandir(directory_descriptor) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name)
+            listing = enumerate_directory(
+                directory_descriptor, NESTED_AGENTS_MAX_ENTRIES_PER_DIRECTORY
+            )
         except OSError:
             state["scan_truncated"] = True
             return
-        subdirectories: list[str] = []
-        for entry in entries:
-            try:
-                is_directory = entry.is_dir(follow_symlinks=False)
-            except OSError:
+        if listing.capped:
+            state["scan_truncated"] = True
+        subdirectories: list[tuple[str, str]] = []
+        for entry in listing.entries:
+            if entry.unclassified:
                 state["scan_truncated"] = True
                 continue
             path = f"{prefix}/{entry.name}" if prefix else entry.name
-            if is_directory:
+            if entry.is_directory:
                 if entry.name not in NESTED_AGENTS_EXCLUDED_DIRECTORIES:
-                    subdirectories.append(path)
+                    subdirectories.append((entry.name, path))
                 continue
             if entry.name != "AGENTS.md" or not prefix:
                 continue
@@ -1077,12 +891,9 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
                 continue
             reported_bytes += name_bytes
             files.append(path)
-        for path in subdirectories:
-            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+        for name, path in subdirectories:
             try:
-                child_descriptor = os.open(
-                    path.rsplit("/", 1)[-1], flags, dir_fd=directory_descriptor
-                )
+                child_descriptor = open_child_directory(directory_descriptor, name)
             except OSError:
                 state["scan_truncated"] = True
                 continue
@@ -1091,9 +902,8 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
             finally:
                 os.close(child_descriptor)
 
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        root_descriptor = os.open(repository, flags)
+        root_descriptor = open_directory(repository)
     except OSError:
         return NestedContextPresence((), False, True)
     try:

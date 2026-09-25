@@ -1023,3 +1023,77 @@ def test_json_document_schema_versions_name_exact_shapes() -> None:
         application.JSON_SCHEMA_VERSION,
         application.COMPACT_JSON_SCHEMA_VERSION,
     }.isdisjoint({1, 2})
+
+
+def test_one_collected_result_feeds_all_three_renderings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from context_loader import application
+
+    repo = _repository(tmp_path)
+    (repo / "AGENTS.md").write_text("# Rules\n\n## Deploy\npush with care\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\n[project.scripts]\ncli = "pkg:cli"\n', encoding="utf-8"
+    )
+
+    collections: list[str] = []
+    original = application.collect_project_context
+
+    def counting(repository: object, **keywords: object) -> object:
+        collections.append(str(repository))
+        return original(repository, **keywords)
+
+    monkeypatch.setattr(application, "collect_project_context", counting)
+    result = application.load_project_context(os.fspath(repo))
+    markdown = result.context.encode("utf-8")
+    document = json.loads(application.render_json(result))
+    compact = json.loads(application.render_json(result, compact=True))
+
+    # Every format is rendered from the one result: nothing is collected again for a
+    # second format, and no format reads rendered text to recover a fact.
+    assert len(collections) == 1
+    assert result.context == document["context"] == compact["context"]
+    assert (
+        [
+            {"code": status.code, "subject": status.subject, "subject_kind": status.subject_kind}
+            for status in result.statuses
+        ]
+        == document["statuses"]
+        == compact["statuses"]
+    )
+    assert document["nested_context"] == compact["nested_context"]
+    assert document["sources"] != []
+    assert [
+        {key: value for key, value in source.items() if key != "content"}
+        for source in document["sources"]
+    ] == compact["sources"]
+    # Markdown stdout is exactly the bytes the shared context hash covers.
+    assert markdown.startswith(b"# Project Context\n")
+    assert hashlib.sha256(markdown).hexdigest() == result.context_sha256
+    assert hashlib.sha256(markdown).hexdigest() == document["context_sha256"]
+
+
+def test_truncated_source_status_is_not_derived_from_marker_text_in_a_body(
+    tmp_path: Path,
+) -> None:
+    from context_loader import application
+
+    repo = _repository(tmp_path)
+    # A repository file may quote the marker as data; that must not become a claim that
+    # the collector or a render budget shortened the body.
+    (repo / "README.md").write_text(
+        "# Overview\n\nThe tool prints … truncated by context-loader … when it cuts a body.\n",
+        encoding="utf-8",
+    )
+
+    document = json.loads(
+        application.render_json(application.load_project_context(os.fspath(repo)))
+    )
+
+    assert "… truncated by context-loader …" in document["context"]
+    assert not any(
+        status["code"] == "truncated" and status["subject"] == "README.md"
+        for status in document["statuses"]
+    )

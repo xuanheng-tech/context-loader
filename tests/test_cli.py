@@ -1043,15 +1043,16 @@ def test_oversized_repository_file_stream_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from context_loader.collect import SKIPPED_UNREADABLE, _read_validated_text
+    from context_loader.filesystem import read_validated_text
+    from context_loader.model import Availability
 
-    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 100)
+    monkeypatch.setattr("context_loader.filesystem.FILE_SCAN_LIMIT_BYTES", 100)
     test_file = tmp_path / "stream_test.txt"
     test_file.write_text("x" * 500, encoding="utf-8")
     with test_file.open("rb") as stream:
-        content, truncated, status, chars = _read_validated_text(stream.fileno(), 16 * 1024)
+        content, truncated, reason, chars = read_validated_text(stream.fileno(), 16 * 1024)
 
-    assert status == SKIPPED_UNREADABLE
+    assert reason is Availability.UNREADABLE
     assert content == ""
     assert truncated is False
     assert chars == 0

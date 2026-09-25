@@ -13,6 +13,38 @@ dates.
   matched 1.3.0 byte for byte (measured on seven repositories). Two README sentences that described
   the document key set and the version renumbering relative to 1.2.0 are restated version-neutrally,
   since a reader of 1.3.1 cannot resolve "now" or "below" from the shipped text.
+- Fixed: a skipped or absent root source reports the machine code of the condition the collector
+  observed, taken from that condition itself, instead of a code looked up from the sentence shown in
+  `context`. The lookup matched only the exact wording in use, so any reworded or newly added
+  sentence fell through to `skipped_unreadable` and `--format json` / `--format json-compact` could
+  report an unrelated condition as an unreadable file with nothing anywhere indicating the mistake.
+  The five codes (`not_present`, `skipped_symlink`, `skipped_not_regular`, `skipped_encoding`,
+  `skipped_unreadable`) and the Markdown sentences are unchanged for every repository that collects
+  today.
+- Fixed: a `truncated` source status is no longer derived by searching the rendered body for the
+  truncation marker. A source whose own text quotes that marker was reported as truncated; only a
+  budget that actually shortened the body now claims it.
+- Changed: the directory tree lists each directory's own entries before descending into any of its
+  subdirectories, so a repository's top-level files are no longer displaced by deep content. In any
+  worktree whose listing includes a subdirectory entry and that subdirectory's own contents, the
+  lines after that entry appear in a different order than in 1.3.1, which changes the
+  `## Directory Tree` body inside `context` and therefore `context_sha256`. The tree's budgets
+  (12 KiB, 300 entries, depth 2), the meaning of `truncated`, the entry kinds and every JSON key are
+  unchanged.
+- Added: directory enumeration is capped per directory — 512 entries for the tree, 1,024 for the
+  nested `AGENTS.md` presence scan — and the retained entries are the alphabetically first names, so
+  a single huge directory is no longer materialised whole and a capped listing does not depend on
+  operating-system enumeration order. Each scan keeps its own budget and its own truncation signal: a
+  directory above the tree cap is named after the listing and by a new `directory_listing_incomplete`
+  `statuses` entry, and a directory above the scan cap sets the existing `scan_truncated` flag and
+  `nested_agents_scan_truncated` status. No JSON key set changes, so `schema_version` stays 3/4.
+- Added: when a directory's own entries no longer fit the tree item budget, its files keep a share of
+  that budget, so a root `README.md` remains listed in a root holding more than 320 directories
+  instead of being crowded out by alphabetically-earlier directories.
+- Changed: the shared limits and frozen value types move to `context_loader/model.py` and the safe,
+  bounded filesystem primitives to `context_loader/filesystem.py`; `collect.py` keeps collection
+  policy, `render.py` derives display text from the typed reason, and no output changes from the move
+  itself.
 
 ## 1.3.1
 

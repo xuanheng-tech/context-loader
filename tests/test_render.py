@@ -9,6 +9,7 @@ from context_loader.collect import (
     TreeEntry,
 )
 from context_loader.git import RecentCommit, RepositoryState
+from context_loader.model import Availability
 from context_loader.render import render_markdown
 
 
@@ -29,9 +30,13 @@ def test_markdown_renderer_matches_1_0_0_golden() -> None:
         ),
     )
     project = ProjectContext(
-        instructions=CollectedFile("AGENTS.md", "markdown", None, "Use care.\n"),
-        overview=CollectedFile("README.md", "markdown", None, "Demo overview.\n"),
-        entry_files=(CollectedFile("pyproject.toml", "toml", None, '[project]\nname = "demo"\n'),),
+        instructions=CollectedFile("AGENTS.md", "markdown", Availability.PRESENT, "Use care.\n"),
+        overview=CollectedFile("README.md", "markdown", Availability.PRESENT, "Demo overview.\n"),
+        entry_files=(
+            CollectedFile(
+                "pyproject.toml", "toml", Availability.PRESENT, '[project]\nname = "demo"\n'
+            ),
+        ),
         commands=(DeclaredCommand("pyproject.toml", "demo", "pkg:main"),),
         directory_tree=DirectoryTree(
             (TreeEntry(".git", "directory"), TreeEntry("README.md", "file"))

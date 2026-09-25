@@ -10,23 +10,24 @@ from pathlib import Path
 
 from . import __version__
 from .collect import (
-    NOT_PRESENT,
-    SKIPPED_ENCODING,
-    SKIPPED_NOT_REGULAR,
-    SKIPPED_SYMLINK,
-    SKIPPED_UNREADABLE,
-    TRUNCATION_MARKER,
+    AgentsSelectionInputError,
+    collect_project_context,
+)
+from .filesystem import display_text
+from .git import ContextLoaderError, collect_repository
+from .model import (
     AgentsSectionAuditEntry,
     AgentsSelectionAudit,
-    AgentsSelectionInputError,
+    Availability,
     CollectedFile,
     NestedContextPresence,
     ProjectContext,
-    collect_project_context,
-    display_text,
 )
-from .git import ContextLoaderError, collect_repository
-from .render import render_markdown_with_details, rendered_source_contents
+from .render import (
+    RenderedSourceBody,
+    render_markdown_with_details,
+    rendered_source_contents,
+)
 
 # Each value names one exact document shape and is never reused: 1 and 2 are the
 # shapes published in release 1.2.0, so adding the nested_context object to both
@@ -37,14 +38,6 @@ COMPACT_JSON_SCHEMA_VERSION = 4
 # either valid JSON within it or a fail-closed error, never a truncated document.
 JSON_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
 TOOL_NAME = "context-loader"
-
-_STATUS_CODE_BY_MESSAGE = {
-    NOT_PRESENT: "not_present",
-    SKIPPED_SYMLINK: "skipped_symlink",
-    SKIPPED_NOT_REGULAR: "skipped_not_regular",
-    SKIPPED_ENCODING: "skipped_encoding",
-    SKIPPED_UNREADABLE: "skipped_unreadable",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,13 +108,11 @@ def _source_kind(name: str) -> str:
 
 def _sources(
     canonical_root: Path,
-    project: ProjectContext,
-    included_sections: tuple[str, ...],
+    rendered_bodies: tuple[RenderedSourceBody, ...],
 ) -> tuple[ProjectContextSource, ...]:
     sources: list[ProjectContextSource] = []
-    for ordinal, (source, content) in enumerate(
-        rendered_source_contents(project, included_sections)
-    ):
+    for ordinal, rendered_body in enumerate(rendered_bodies):
+        source = rendered_body.source
         path = canonical_root / source.name
         sources.append(
             ProjectContextSource(
@@ -129,8 +120,8 @@ def _sources(
                 kind=_source_kind(source.name),
                 scope=source_scope_for_path(path, canonical_root),
                 path=path,
-                content_sha256=_text_sha256(content),
-                content=content,
+                content_sha256=_text_sha256(rendered_body.body),
+                content=rendered_body.body,
                 selection=source.selection,
             )
         )
@@ -142,9 +133,8 @@ def _status(code: str, subject_kind: str, subject: str) -> ContextStatus:
 
 
 def _statuses_for_source(source: CollectedFile) -> list[ContextStatus]:
-    if source.status is not None:
-        code = _STATUS_CODE_BY_MESSAGE.get(source.status, "skipped_unreadable")
-        return [_status(code, "source", source.name)]
+    if source.reason is not Availability.PRESENT:
+        return [_status(source.reason.value, "source", source.name)]
     statuses: list[ContextStatus] = []
     if source.truncated or (source.selection is not None and source.selection.truncated):
         statuses.append(_status("truncated", "source", source.name))
@@ -164,7 +154,7 @@ def _build_statuses(
     omitted_sections: tuple[str, ...],
     changes_truncated: bool,
     commands_truncated: bool,
-    rendered_sources: tuple[ProjectContextSource, ...],
+    rendered_bodies: tuple[RenderedSourceBody, ...],
 ) -> tuple[ContextStatus, ...]:
     statuses: list[ContextStatus] = []
     for source in (project.instructions, project.overview, *project.entry_files):
@@ -175,10 +165,10 @@ def _build_statuses(
         for status in statuses
         if status.subject_kind == "source" and status.code == "truncated"
     }
-    for source in rendered_sources:
-        if TRUNCATION_MARKER not in source.content:
+    for rendered_body in rendered_bodies:
+        if not rendered_body.truncated:
             continue
-        name = source.path.name
+        name = rendered_body.source.name
         if name in truncated_sources:
             continue
         statuses.append(_status("truncated", "source", name))
@@ -195,7 +185,11 @@ def _build_statuses(
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
             statuses.append(_status("unreadable", "tree_entry", display_text(subject)))
-
+    for path in project.directory_tree.incomplete_directories:
+        subject = path if path else "."
+        statuses.append(
+            _status("directory_listing_incomplete", "tree_entry", display_text(subject))
+        )
     for title in omitted_sections:
         statuses.append(_status("section_omitted", "section", title))
 
@@ -233,13 +227,14 @@ def load_project_context(
         raise ContextLoaderError(str(exc), exit_code=2) from None
     rendered = render_markdown_with_details(state, project)
     context = rendered.output.decode("utf-8")
-    sources = _sources(state.repository, project, rendered.included_sections)
+    rendered_bodies = rendered_source_contents(project, rendered.included_sections)
+    sources = _sources(state.repository, rendered_bodies)
     statuses = _build_statuses(
         project,
         omitted_sections=rendered.omitted_sections,
         changes_truncated=rendered.changes_truncated,
         commands_truncated=rendered.commands_truncated,
-        rendered_sources=sources,
+        rendered_bodies=rendered_bodies,
     )
     return ProjectContextResult(
         schema_version=JSON_SCHEMA_VERSION,

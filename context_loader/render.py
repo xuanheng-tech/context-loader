@@ -6,23 +6,25 @@ import os
 import re
 from dataclasses import dataclass
 
-from .collect import (
+from .collect import render_agents_selection_audit
+from .filesystem import display_text
+from .git import RecentCommit, RepositoryState
+from .model import (
     AGENTS_LIMIT_BYTES,
     DECLARED_COMMANDS_LIMIT_BYTES,
     DIRECTORY_TREE_LIMIT_BYTES,
+    DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
     ENTRY_FILE_LIMIT_BYTES,
     ENTRY_FILES_TOTAL_LIMIT_BYTES,
     README_LIMIT_BYTES,
     TRUNCATION_MARKER,
+    Availability,
     CollectedFile,
     DeclaredCommand,
     DirectoryTree,
     ProjectContext,
     TreeEntry,
-    display_text,
-    render_agents_selection_audit,
 )
-from .git import RecentCommit, RepositoryState
 
 SCHEMA = "context-loader/v0.1"
 GLOBAL_OUTPUT_LIMIT_BYTES = 98_304
@@ -38,6 +40,38 @@ class MarkdownRender:
     omitted_sections: tuple[str, ...]
     changes_truncated: bool
     commands_truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RenderedSourceBody:
+    """One collected source as it actually entered the rendered context.
+
+    ``truncated`` is the renderer's own claim that this body was shortened by a render
+    budget, so machine output never has to look for a marker inside rendered text.
+    """
+
+    source: CollectedFile
+    body: str
+    truncated: bool
+
+
+def _unavailable_sentence(reason: Availability) -> str:
+    """Derive the fixed display sentence for one unusable source.
+
+    The reason is the fact and the sentence is its rendering: an unusable reason raises
+    rather than being mapped to a plausible-looking sentence.
+    """
+    if reason is Availability.NOT_PRESENT:
+        return "Not present."
+    if reason is Availability.SYMLINK:
+        return "Skipped: symlink."
+    if reason is Availability.NOT_REGULAR:
+        return "Skipped: not a regular file."
+    if reason is Availability.ENCODING:
+        return "Skipped: unsupported text encoding."
+    if reason is Availability.UNREADABLE:
+        return "Skipped: unreadable."
+    raise AssertionError(f"no display sentence for source reason {reason!r}")
 
 
 def _display_limited(value: str, limit: int) -> str | None:
@@ -80,21 +114,21 @@ def _fenced(language: str, body: str) -> str:
     return f"{fence}{language}\n{body}{separator}{fence}"
 
 
-def _file_body(source: CollectedFile, limit: int) -> str | None:
-    if source.status is not None:
+def _file_body(source: CollectedFile, limit: int) -> tuple[str, bool] | None:
+    """Rendered body plus whether a render budget cut it; ``None`` when unusable."""
+    if not source.is_text:
         return None
     if source.selection is not None:
-        return source.content
-    body, _truncated = _content_with_marker(source.content, limit, source.truncated)
-    return body
+        return source.content, False
+    body, truncated = _content_with_marker(source.content, limit, source.truncated)
+    return body, truncated
 
 
 def _file_payload(source: CollectedFile, limit: int) -> str:
     body = _file_body(source, limit)
     if body is None:
-        assert source.status is not None
-        return source.status
-    return _fenced(source.language, body)
+        return _unavailable_sentence(source.reason)
+    return _fenced(source.language, body[0])
 
 
 def _change_lines(state: RepositoryState) -> tuple[list[str], bool]:
@@ -186,9 +220,10 @@ def _render_commands(commands: tuple[DeclaredCommand, ...]) -> tuple[str, bool]:
     return "\n".join(("## Declared Commands", "", body)), truncated
 
 
-def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int]:
-    if source.status is not None:
-        return None, 0
+def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int, bool]:
+    """Rendered body, consumed aggregate bytes, and whether a render budget cut it."""
+    if not source.is_text:
+        return None, 0, False
     encoded_size = len(source.content.encode())
     aggregate_truncated = encoded_size > remaining
     needs_marker = source.truncated or aggregate_truncated
@@ -197,14 +232,13 @@ def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int]
     visible, was_cut = _truncate_at_line_boundary(source.content, max(0, content_limit))
     needs_marker = needs_marker or was_cut
     body = f"{visible}{TRUNCATION_MARKER}" if needs_marker else visible
-    return body, len(visible.encode())
+    return body, len(visible.encode()), needs_marker
 
 
 def _entry_payload(source: CollectedFile, remaining: int) -> tuple[str, int]:
-    body, consumed = _entry_body(source, remaining)
+    body, consumed, _truncated = _entry_body(source, remaining)
     if body is None:
-        assert source.status is not None
-        return source.status, consumed
+        return _unavailable_sentence(source.reason), consumed
     return _fenced(source.language, body), consumed
 
 
@@ -254,6 +288,15 @@ def _tree_line(entry: TreeEntry) -> str:
     return path
 
 
+def _incomplete_directory_note(path: str) -> str:
+    subject = display_text(path) if path else "."
+    return (
+        f"Listing incomplete: {subject} holds more than "
+        f"{DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY} directory entries, so only the "
+        f"alphabetically first {DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY} were examined."
+    )
+
+
 def _render_directory_tree(tree: DirectoryTree) -> str:
     lines = [_tree_line(entry) for entry in tree.entries]
     if not lines:
@@ -263,7 +306,10 @@ def _render_directory_tree(tree: DirectoryTree) -> str:
         DIRECTORY_TREE_LIMIT_BYTES,
         already_truncated=tree.truncated,
     )
-    return "\n".join(("## Directory Tree", "", _fenced("text", body)))
+    parts = ["## Directory Tree", "", _fenced("text", body)]
+    for path in tree.incomplete_directories:
+        parts.extend(("", _incomplete_directory_note(path)))
+    return "\n".join(parts)
 
 
 def _omitted_section(title: str) -> str:
@@ -342,26 +388,26 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
 
 def rendered_source_contents(
     project: ProjectContext, included_sections: tuple[str, ...]
-) -> tuple[tuple[CollectedFile, str], ...]:
+) -> tuple[RenderedSourceBody, ...]:
     """Return source-file bodies that actually appear in the final Markdown context."""
     included = frozenset(included_sections)
-    rendered: list[tuple[CollectedFile, str]] = []
+    rendered: list[RenderedSourceBody] = []
     if "Development Instructions" in included:
         body = _file_body(project.instructions, AGENTS_LIMIT_BYTES)
         if body is not None:
-            rendered.append((project.instructions, body))
+            rendered.append(RenderedSourceBody(project.instructions, body[0], body[1]))
     if "Project Overview" in included:
         body = _file_body(project.overview, README_LIMIT_BYTES)
         if body is not None:
-            rendered.append((project.overview, body))
+            rendered.append(RenderedSourceBody(project.overview, body[0], body[1]))
     if "Project Entry Files" in included:
         used_content = 0
         for source in project.entry_files:
             remaining = max(0, ENTRY_FILES_TOTAL_LIMIT_BYTES - used_content)
-            body, consumed = _entry_body(source, remaining)
+            body, consumed, truncated = _entry_body(source, remaining)
             used_content += consumed
             if body is not None:
-                rendered.append((source, body))
+                rendered.append(RenderedSourceBody(source, body, truncated))
     return tuple(rendered)
 
 

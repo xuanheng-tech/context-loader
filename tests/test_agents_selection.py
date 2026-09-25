@@ -13,6 +13,7 @@ from context_loader.collect import (
     collect_project_context,
     render_agents_selection_audit,
 )
+from context_loader.model import Availability
 
 
 def _collect(
@@ -278,7 +279,7 @@ def test_heading_dense_head_degrades_instead_of_failing_collection(tmp_path: Pat
     project = collect_project_context(repo)
 
     source = project.instructions
-    assert source.status is None
+    assert source.reason is Availability.PRESENT
     assert source.selection is not None
     assert source.selection.parse_fallback is False
     assert source.selection.indexed_only_sections == ()
