@@ -600,11 +600,16 @@ def test_many_capped_directories_cannot_inflate_the_tree_section(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The published byte claims for this fixture are checked here.
+    """The section stays bounded however many directories are capped, and the totals reconcile.
 
-    120 capped directories once produced 120 unbudgeted notes and pushed the section 5,710
-    bytes past the 12 KiB it documents. The section must now stay bounded while the listing
-    body keeps every entry it kept before, so bounding the claim cannot cost evidence.
+    In 7562d86 every capped directory emitted its own note outside any budget, so the section
+    grew with the number of capped directories instead of staying inside the listing budget.
+    This reduced stand-in exercises that shape cheaply -- 120 capped directories on disk, with
+    the enumeration cap lowered so the root is itself capped and only a few descendants are
+    reached -- and checks the invariants, not the absolute byte counts published in
+    CHANGELOG.md, which belong to the full-size fixture named there and depend on its name
+    widths. Note count, status bound, section bound and the reconciliation of the reported
+    total with named entries plus aggregate are all machine-checked below.
     """
     from context_loader.model import DIRECTORY_TREE_LIMIT_BYTES
 
