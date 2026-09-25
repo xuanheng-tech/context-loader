@@ -290,7 +290,13 @@ def _tree_line(entry: TreeEntry) -> str:
 
 
 def _incomplete_directory_note(tree: DirectoryTree) -> str:
-    """One bounded line whose every number is something the collection actually observed."""
+    """One bounded line whose every claim is something the collection actually observed.
+
+    The listing is limited three times over: a capped directory offers only an alphabetical
+    prefix, the item budget keeps only some offered entries, and the section budget cuts what
+    is rendered. The wording must stay true under all three, so it never states how many names
+    reached the listing.
+    """
     shown = tree.incomplete_directories[:DIRECTORY_TREE_INCOMPLETE_NOTE_EXAMPLES]
     examples = ", ".join(f"`{display_text(path) if path else '.'}`" for path in shown)
     further = len(tree.incomplete_directories) - len(shown)
@@ -298,13 +304,16 @@ def _incomplete_directory_note(tree: DirectoryTree) -> str:
         examples += f" (+{further} more named in statuses)"
     unnamed = tree.incomplete_count - len(tree.incomplete_directories)
     if unnamed > 0:
-        examples += f" ({unnamed} further directories left unnamed here)"
+        remainder = "directory" if unnamed == 1 else "directories"
+        examples += f" ({unnamed} further {remainder} left unnamed here)"
     stem = "directory" if tree.incomplete_count == 1 else "directories"
     limit = tree.enumeration_limit
     return (
         f"Listing incomplete: {tree.incomplete_count} {stem} held more entries than the "
-        f"{limit}-entry per-directory enumeration limit, so each contributed only its "
-        f"alphabetically first {limit} names to this listing. Named here: {examples}."
+        f"{limit}-entry per-directory enumeration limit, so only an alphabetically first "
+        f"prefix of each was examined and the rest were neither examined nor listed; this "
+        f"section also keeps only as many entries as its own entry and byte budgets allow. "
+        f"Named here: {examples}."
     )
 
 

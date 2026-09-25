@@ -51,10 +51,12 @@ dates.
   `nested_agents_scan_truncated` status. No JSON key set changes, so `schema_version` stays 3/4.
 - Added: when a directory's own entries no longer fit the tree item budget, its subdirectories and
   its non-directories each keep a share of it, so alphabetically-earlier directories cannot crowd
-  out a root `README.md` entirely. The precondition is now stated exactly: the guarantee needs the
-  root to be enumerated without hitting the 512-entry limit *and* the 300-entry budget to still have
-  room. Above the enumeration limit only an alphabetical prefix is ever seen, so no particular file
-  is promised; the listing reports the count, the limit and its retained examples instead.
+  out a root `README.md` entirely. The precondition is now stated exactly, and it is three limits
+  rather than two: the root must be enumerated without hitting the 512-entry cap, the 300-entry
+  budget must still have a slot, and the 12 KiB listing budget must still have room to render the
+  line. Any one of them can drop a name on its own, so the tool promises no specific file; where a
+  limit bites the listing reports the count, the cap and its retained examples instead of
+  implying completeness.
 - Fixed: a directory tree shortened by its own 12 KiB render budget is now reported in the machine
   formats. The renderer kept that fact to itself, so `context` carried the truncation marker while
   `statuses` stayed silent: measured on a repository of 297 root files with 41-character names, 298

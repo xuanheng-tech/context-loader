@@ -107,8 +107,10 @@ def test_enumeration_cap_claims_an_incomplete_root_listing(tmp_path: Path) -> No
     ]
     assert notes == [
         f"Listing incomplete: 1 directory held more entries than the {TREE_CAP}-entry "
-        f"per-directory enumeration limit, so each contributed only its alphabetically "
-        f"first {TREE_CAP} names to this listing. Named here: `.`."
+        f"per-directory enumeration limit, so only an alphabetically first prefix of each "
+        f"was examined and the rest were neither examined nor listed; this section also "
+        f"keeps only as many entries as its own entry and byte budgets allow. "
+        f"Named here: `.`."
     ]
     assert _incomplete_subjects(document) == ["."]
     assert {
@@ -304,6 +306,56 @@ def _per_directory_statuses(document: dict[str, object]) -> list[dict[str, str]]
         if status["code"] == "directory_listing_incomplete"
         and status["subject_kind"] == "tree_entry"
     ]
+
+
+def test_note_stays_true_when_the_item_budget_hides_most_of_a_capped_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A capped prefix is not the same thing as a listed prefix.
+
+    With the item budget lowered, only a few offered names ever reach the listing, so any
+    wording claiming the limit's worth of names contributed to it would be false.
+    """
+    cap = 12
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ITEMS", 6)
+    repo = _repository(tmp_path)
+    directory = repo / "capped"
+    directory.mkdir()
+    for index in range(cap + 1):
+        (directory / f"e{index}.txt").write_text("x\n", encoding="utf-8")
+
+    result, _document = _load(repo)
+    lines, _section = _tree(result)
+    notes = [line for line in result.context.splitlines() if line.startswith("Listing incomplete:")]
+
+    assert len(notes) == 1
+    assert len(lines) <= 7, "the fixture must really be item-budget limited"
+    assert "was examined and the rest were neither examined nor listed" in notes[0]
+    for false_claim in (f"{cap} names to this listing", f"first {cap} of each were listed"):
+        assert false_claim not in notes[0]
+
+
+def test_note_grammar_matches_a_single_or_several_unnamed_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nine capped directories leave exactly one unnamed; the sentence must say so."""
+    cap = 12
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    _capped_directories(repo, 9, cap)
+
+    result, document = _load(repo)
+    notes = [line for line in result.context.splitlines() if line.startswith("Listing incomplete:")]
+
+    assert len(notes) == 1
+    assert "(1 further directory left unnamed here)" in notes[0]
+    assert "1 further directories" not in notes[0]
+    aggregate = _aggregate_statuses(document)
+    assert len(aggregate) == 1
+    assert aggregate[0]["subject"].endswith("1 further directory not named individually")
 
 
 def test_capped_directories_beyond_the_example_limit_report_an_aggregate(

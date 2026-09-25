@@ -154,10 +154,10 @@ class DirectoryTree:
     never presented as a complete one and the claim stays bounded however many hit the cap.
 
     Root-level non-directories are listed ahead of any descent, so they are not displaced by deep
-    content. That holds only while the root offers them -- at most ``enumeration_limit`` entries in
-    the root -- and the item budget still has room; a capped root retains an alphabetical prefix
-    only, and makes no claim about which files survived it. See ``_collect_directory_tree`` for the
-    two limits and where each one bites.
+    content. That is not a promise that a given root file appears: three separate limits can each
+    drop it, namely the root's enumeration cap, the entry budget, and the section's byte budget.
+    A capped root retains an alphabetical prefix only and makes no claim about which files survived
+    it. See ``_collect_directory_tree`` for the three limits and where each one bites.
     """
 
     entries: tuple[TreeEntry, ...]

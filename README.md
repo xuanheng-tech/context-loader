@@ -324,14 +324,16 @@ bullet is a per-component, read or capture bound, as each one states:
   aggregate entry giving the totals when more directories were capped than are named: beyond the
   retained examples a capped directory is counted but not individually named, and no listing
   claims completeness it does not have.
-  Two limits act in sequence and a guarantee depends on both. The 512-entry enumeration limit
-  decides which names a directory offers at all; above it only an alphabetical prefix is ever
-  seen. The 300-entry item budget, split between a directory's subdirectories and its
-  non-directories so neither group can crowd the other out entirely, decides which offered names
-  are kept. Descent happens after a directory's own entries, so deep content cannot displace
-  top-level names: a root `README.md` is listed whenever the root is not enumeration-capped and
-  the item budget still has room. When either limit bites, the listing is reported as incomplete
-  and no particular file is guaranteed to survive.
+  Three limits act in sequence and a name survives only if all three leave room. The 512-entry
+  enumeration limit decides which names a directory offers at all; above it only an alphabetical
+  prefix is ever seen. The 300-entry item budget, split between a directory's subdirectories and
+  its non-directories so neither group can crowd the other out entirely, decides which offered
+  names are kept. The 12 KiB listing budget then decides which kept names are rendered. Descent
+  happens after a directory's own entries, so deep content cannot displace top-level names, but
+  the tool promises no specific file: a root `README.md` is listed only when the root is not
+  enumeration-capped, the entry budget still has a slot, and the byte budget still has room, and
+  each of those three can fail on its own. Whenever one bites, the listing says so through the
+  note, the marker, or a `truncated` status instead of presenting itself as complete.
   The `Listing incomplete:` line is charged to the 12 KiB listing budget before the body is cut,
   so the claim can never inflate the section; its cost is paid in listing bytes, so a long note
   removes that many bytes of entries, and the `truncated` status plus the marker inside the
