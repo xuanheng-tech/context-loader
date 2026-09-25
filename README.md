@@ -329,9 +329,10 @@ bullet is a per-component, read or capture bound, as each one states:
   disclosed as their parent's truncation rather than as separate numbers.
   Three limits act in sequence and a name survives only if all three leave room. The 512-entry
   enumeration limit decides which names a directory offers at all; above it only an alphabetical
-  prefix is ever seen. The 300-entry item budget, split between a directory's subdirectories and
-  its non-directories so neither group can crowd the other out entirely, decides which offered
-  names are kept. The 12 KiB listing budget then decides which kept names are rendered. Descent
+  prefix is ever seen. The 300-entry item budget is then shared between a directory's
+  subdirectories and its non-directories: each may take up to half of what remains before the other
+  claims the surplus, which stops alphabetically-earlier directories from evicting every file, but
+  it is a share rather than a floor -- with a single slot left the non-directories take it. The 12 KiB listing budget then decides which kept names are rendered. Descent
   happens after a directory's own entries, so deep content cannot displace top-level names, but
   the tool promises no specific file: a root `README.md` is listed only when the root is not
   enumeration-capped, the entry budget still has a slot, and the byte budget still has room, and

@@ -594,3 +594,44 @@ def test_incomplete_reporting_is_deterministic_across_repeated_loads(
     assert first.context == second.context
     assert first_document["statuses"] == second_document["statuses"]
     assert first_document["context_sha256"] == second_document["context_sha256"]
+
+
+def test_many_capped_directories_cannot_inflate_the_tree_section(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The published byte claims for this fixture are checked here.
+
+    120 capped directories once produced 120 unbudgeted notes and pushed the section 5,710
+    bytes past the 12 KiB it documents. The section must now stay bounded while the listing
+    body keeps every entry it kept before, so bounding the claim cannot cost evidence.
+    """
+    from context_loader.model import DIRECTORY_TREE_LIMIT_BYTES
+
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", 3)
+    repo = _repository(tmp_path)
+    for outer in range(120):
+        directory = repo / f"cap{outer:03d}"
+        directory.mkdir()
+        for inner in range(4):
+            (directory / f"item{inner:03d}").write_text("", encoding="utf-8")
+
+    result, document = _load(repo)
+    _lines, section = _tree(result)
+    body = section.split("```text\n", 1)[1].rsplit("\n```", 1)[0]
+    notes = [line for line in section.splitlines() if line.startswith("Listing incomplete:")]
+    incomplete = _incomplete_subjects(document)
+
+    assert len(notes) == 1
+    assert len(incomplete) <= 9, "named entries plus at most one aggregate"
+    assert len(body.encode("utf-8")) <= DIRECTORY_TREE_LIMIT_BYTES
+    assert len(section.encode("utf-8")) <= DIRECTORY_TREE_LIMIT_BYTES + 128, "bounded section"
+    per_directory = _per_directory_statuses(document)
+    aggregate = _aggregate_statuses(document)
+    assert per_directory, "capped directories were reached"
+    # Note, named entries and aggregate must reconcile, whether or not anything was elided.
+    reported = int(notes[0].split("Listing incomplete: ")[1].split(" ")[0])
+    assert reported == len(per_directory) + (
+        int(aggregate[0]["subject"].split(";")[1].split(" ")[1]) if aggregate else 0
+    )
+    assert (reported > len(per_directory)) == bool(aggregate)

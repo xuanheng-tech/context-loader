@@ -43,13 +43,17 @@ dates.
 directories the listing reached: a directory is reached only when its parent offered it inside that
 parent's own alphabetical prefix and kept it, so capped siblings displaced by the entry budget are
 disclosed through their parent's truncation rather than as separate numbers. Previously each capped directory
-  produced its own unbounded note outside any budget. Measured on one reproducible fixture of 120
-  directories each holding 513 entries, the `## Directory Tree` section was 3,058 bytes on 1.3.1
-  (no notes), 16,622 bytes with 120 notes on 7562d86 -- 4,334 bytes past the 12 KiB it documents --
-  and is 2,990 bytes with one note on this revision. The note is now charged against the 12 KiB
-  listing budget before the body is cut, so the claim cannot inflate the section, and its cost is
-  paid in listing bytes rather than capped at one line. The heading and fence lines remain unmetered,
-  as they were in 1.3.1. Internal counting and deduplication use the raw directory
+  produced its own unbounded note outside any budget. Measured on the fixture pinned in
+  ``tests/test_directory_tree.py`` -- 120 empty directories ``cap000`` to ``cap119``, each holding
+  513 empty files ``item000`` to ``item512``, committed with both dates set to
+  2020-01-01T00:00:00+0000 -- the `## Directory Tree` section is 4,551 bytes on 1.3.1 with no
+  incompleteness note or status at all, 17,998 bytes on 7562d86 with 120 notes, which is 5,710
+  bytes past the 12 KiB it documents, and 4,132 bytes here with one note. The listing body is the
+  same 3,687 bytes on 7562d86 and here, so bounding the note cost no entries, while the section
+  dropped by 13,866 bytes. The note is charged against the 12 KiB listing budget before the body is
+  cut, so the claim cannot inflate the section; where the note is long it is paid for in listing
+  bytes, and the marker plus ``truncated`` say so. The heading and fence lines remain unmetered, as
+  they were in 1.3.1. Internal counting and deduplication use the raw directory
   path and the aggregate carries an explicit identity, because display escaping is not injective: a
   directory named `` ` `` and one named `\x60` render identically and must stay two facts. A
   directory above the nested-scan cap sets the existing `scan_truncated` flag and
