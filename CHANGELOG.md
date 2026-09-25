@@ -43,14 +43,17 @@ dates.
 directories the listing reached: a directory is reached only when its parent offered it inside that
 parent's own alphabetical prefix and kept it, so capped siblings displaced by the entry budget are
 disclosed through their parent's truncation rather than as separate numbers. Previously each capped directory
-  produced its own unbounded note outside any budget. Measured on the fixture pinned in
-  ``tests/test_directory_tree.py`` -- 120 empty directories ``cap000`` to ``cap119``, each holding
-  513 empty files ``item000`` to ``item512``, committed with both dates set to
-  2020-01-01T00:00:00+0000 -- the `## Directory Tree` section is 4,551 bytes on 1.3.1 with no
+  produced its own unbounded note outside any budget. Measured on a freshly built repository of
+  exactly 120 directories ``cap000`` to ``cap119``, each holding the 513 empty files ``item000`` to
+  ``item512``, committed with ``GIT_AUTHOR_DATE`` and ``GIT_COMMITTER_DATE`` both
+  ``2020-01-01T00:00:00+0000`` and no other entries -- the section is 4,551 bytes on 1.3.1 with no
   incompleteness note or status at all, 17,998 bytes on 7562d86 with 120 notes, which is 5,710
   bytes past the 12 KiB it documents, and 4,132 bytes here with one note. The listing body is the
   same 3,687 bytes on 7562d86 and here, so bounding the note cost no entries, while the section
-  dropped by 13,866 bytes. The note is charged against the 12 KiB listing budget before the body is
+  dropped by 13,866 bytes. ``tests/test_directory_tree.py`` machine-checks the invariants on a
+  reduced form of this shape -- one note, a bounded status count, a section inside its budget and a
+  reconciled total -- not these absolute byte counts, which depend on the name widths above.
+  The note is charged against the 12 KiB listing budget before the body is
   cut, so the claim cannot inflate the section; where the note is long it is paid for in listing
   bytes, and the marker plus ``truncated`` say so. The heading and fence lines remain unmetered, as
   they were in 1.3.1. Internal counting and deduplication use the raw directory
