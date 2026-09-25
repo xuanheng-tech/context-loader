@@ -761,12 +761,23 @@ def _entry_slots(directories: int, others: int, remaining: int) -> tuple[int, in
 def _collect_directory_tree(root: Path) -> DirectoryTree:
     """List one repository tree root-first, with a bounded and honest enumeration.
 
-    A directory's own entries are listed before any of its subdirectories is descended into,
-    which keeps the repository's top-level files visible for as long as the root's own
-    enumeration stays below the per-directory cap. Once a directory is capped the retained
-    names are simply the alphabetically first ones, and nothing here claims which files
-    survived. Every capped directory is counted and only a bounded number of examples is kept,
-    so the completeness claim cannot itself grow the listing.
+    Two limits act in sequence, and the guarantee depends on both:
+
+    1. ``DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY`` decides which names a directory *offers* to
+       the listing. A directory at or below the limit offers all of its names; above it, only the
+       alphabetically first ``limit`` names are offered and the rest are never seen.
+    2. ``DIRECTORY_TREE_MAX_ITEMS`` together with :func:`_entry_slots` decides which of the
+       offered names are *kept*: within a directory, subdirectories and non-directories each get
+       a share of the remaining budget, so one group cannot crowd the other out entirely.
+
+    Descending happens after a directory's own names are kept, so deep content cannot displace
+    top-level names. A root-level non-directory is therefore guaranteed to be listed exactly when
+    the root offers it -- the root holds at most the enumeration limit of entries -- and the item
+    budget still has room for it. Neither condition is met unconditionally: a capped root keeps
+    only an alphabetical prefix, and a root whose own entries exhaust the item budget lists no
+    descendants. Both cases are reported as incomplete rather than presented as a full listing;
+    capped directories are counted fully while only a bounded set of examples is retained, so the
+    claim cannot itself grow the listing.
     """
     collected: list[TreeEntry] = []
     incomplete: list[str] = []

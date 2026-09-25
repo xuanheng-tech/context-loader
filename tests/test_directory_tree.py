@@ -106,9 +106,9 @@ def test_enumeration_cap_claims_an_incomplete_root_listing(tmp_path: Path) -> No
         line for line in document["context"].splitlines() if line.startswith("Listing incomplete:")
     ]
     assert notes == [
-        f"Listing incomplete: 1 directory exceeded the {TREE_CAP}-entry per-directory "
-        f"enumeration limit, so only the alphabetically first {TREE_CAP} of each was "
-        f"examined. Named here: `.`."
+        f"Listing incomplete: 1 directory held more entries than the {TREE_CAP}-entry "
+        f"per-directory enumeration limit, so each contributed only its alphabetically "
+        f"first {TREE_CAP} names to this listing. Named here: `.`."
     ]
     assert _incomplete_subjects(document) == ["."]
     assert {
@@ -139,7 +139,7 @@ def test_enumeration_cap_is_attributed_to_the_directories_that_hit_it(
     notes = [line for line in section.splitlines() if line.startswith("Listing incomplete:")]
     assert _incomplete_subjects(document) == ["deep", "wide"]
     assert len(notes) == 1
-    assert "2 directories exceeded" in notes[0]
+    assert "2 directories held more entries" in notes[0]
     assert "`deep`" in notes[0] and "`wide`" in notes[0]
     assert "` .`" not in notes[0]
     # The root itself was enumerated whole, so it is not among the named incomplete ones.
@@ -268,3 +268,231 @@ def test_listing_is_independent_of_the_operating_systems_enumeration_order(
     assert backward_lines == forward_lines
     assert forward.context == backward.context
     assert forward_document["statuses"] == backward_document["statuses"]
+
+
+def _capped_directories(repo: Path, count: int, cap: int) -> list[str]:
+    """Create ``count`` root directories that each hold more than ``cap`` entries.
+
+    They must sit at the repository root: ``DIRECTORY_TREE_MAX_DEPTH`` stops descent before a
+    directory two levels down is ever enumerated, so a nested fixture would report nothing.
+    ``cap`` therefore has to be at least ``count + 1``, or the root itself would be capped by
+    these very directories and the test would measure a different fact than it claims.
+    """
+    # Root entries are these directories plus .git and tracked.txt.
+    assert cap >= count + 2, "the root must not be capped by the fixtures themselves"
+    names = [f"cap{i:03d}" for i in range(count)]
+    for name in names:
+        directory = repo / name
+        directory.mkdir()
+        for index in range(cap + 1):
+            (directory / f"e{index}.txt").write_text("x\n", encoding="utf-8")
+    return names
+
+
+def _aggregate_statuses(document: dict[str, object]) -> list[dict[str, str]]:
+    return [
+        status
+        for status in document["statuses"]
+        if status["code"] == "directory_listing_incomplete" and status["subject_kind"] == "tree"
+    ]
+
+
+def _per_directory_statuses(document: dict[str, object]) -> list[dict[str, str]]:
+    return [
+        status
+        for status in document["statuses"]
+        if status["code"] == "directory_listing_incomplete"
+        and status["subject_kind"] == "tree_entry"
+    ]
+
+
+def test_capped_directories_beyond_the_example_limit_report_an_aggregate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cap = 14
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    _capped_directories(repo, 12, cap)
+
+    _result, document = _load(repo)
+    subjects = _incomplete_subjects(document)
+    per_directory = _per_directory_statuses(document)
+    aggregate = _aggregate_statuses(document)
+
+    # Eight named individually, the remainder folded into exactly one bounded summary.
+    assert len(per_directory) == 8
+    assert [status["subject"] for status in per_directory] == [f"cap{i:03d}" for i in range(8)]
+    assert len(aggregate) == 1
+    assert aggregate[0]["code"] == "directory_listing_incomplete"
+    assert aggregate[0]["subject"] == (
+        f"12 directories exceeded the {cap}-entry per-directory enumeration limit; "
+        "4 further directories not named individually"
+    )
+    assert len(subjects) == 9
+    assert aggregate[0]["subject"] == subjects[-1]
+
+
+def test_aggregate_says_directory_for_a_single_remainder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cap = 11
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    _capped_directories(repo, 9, cap)
+
+    _result, document = _load(repo)
+    aggregate = _aggregate_statuses(document)
+    assert len(aggregate) == 1
+    assert aggregate[0]["subject"].endswith("1 further directory not named individually")
+
+
+def test_no_aggregate_when_every_capped_directory_is_named(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cap = 10
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    names = _capped_directories(repo, 8, cap)
+
+    _result, document = _load(repo)
+    assert _incomplete_subjects(document) == names
+    assert _aggregate_statuses(document) == []
+
+
+def test_display_escaping_cannot_merge_two_capped_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two names that escape to the same text are still two facts, and still counted.
+
+    `display_text` is not injective: a directory named "`" and one named "\x60" both render
+    as the four characters \x60. Deduplicating or counting on the displayed text would
+    silently drop one capped directory and understate the aggregate.
+    """
+    cap = 12
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    colliding = ("`", "\\x60")
+    for name in (*colliding, *(f"cap{index}" for index in range(7))):
+        directory = repo / name
+        directory.mkdir()
+        for index in range(cap + 1):
+            (directory / f"e{index}.txt").write_text("x\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    per_directory = _per_directory_statuses(document)
+    aggregate = _aggregate_statuses(document)
+
+    # Nine capped directories, so eight are named individually and one is not. Had the
+    # collision collapsed, only seven would be named and the arithmetic would still claim eight.
+    assert len(per_directory) == 8, "two distinct directories must stay two statuses"
+    assert sum(1 for status in per_directory if status["subject"] == r"\x60") == 2
+    assert len(aggregate) == 1
+    assert aggregate[0]["subject"] == (
+        f"9 directories exceeded the {cap}-entry per-directory enumeration limit; "
+        "1 further directory not named individually"
+    )
+    notes = [line for line in result.context.splitlines() if line.startswith("Listing incomplete:")]
+    assert len(notes) == 1
+    assert "9 directories held more entries" in notes[0]
+    assert notes[0].count(r"`\x60`") == 2, "both colliding names appear in the note"
+
+
+def test_enumeration_cap_reports_nothing_at_the_limit_and_everything_above_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cap = 4
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    exact = repo / "exactly"
+    exact.mkdir()
+    for index in range(cap):
+        (exact / f"e{index}.txt").write_text("x\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    assert _incomplete_subjects(document) == []
+    assert "Listing incomplete" not in result.context
+    assert result.context.count("```text") == 1
+
+    over = repo / "over"
+    over.mkdir()
+    for index in range(cap + 1):
+        (over / f"e{index}.txt").write_text("x\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    assert _incomplete_subjects(document) == ["over"]
+    assert "1 directory held more entries" in result.context
+
+
+def test_item_budget_truncation_is_not_reported_as_an_enumeration_cap(tmp_path: Path) -> None:
+    """The two limits are attributed separately: a short budget is not a capped directory."""
+    repo = _repository(tmp_path)
+    for index in range(250):
+        directory = repo / f"d{index:03d}"
+        directory.mkdir()
+        (directory / "x.py").write_text("x\n", encoding="utf-8")
+    for index in range(200):
+        (repo / f"f{index:03d}.txt").write_text("y\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    lines, _section = _tree(result)
+
+    assert len(lines) - 1 == DIRECTORY_TREE_MAX_ITEMS
+    assert lines[-1] == MARKER
+    assert _incomplete_subjects(document) == []
+    assert "Listing incomplete" not in result.context
+    assert {
+        "code": "truncated",
+        "subject_kind": "tree",
+        "subject": "Directory Tree",
+    } in document["statuses"]
+    # Both root groups kept a share of the budget: neither was crowded out entirely.
+    assert any(line.endswith("/") for line in lines)
+    assert any(line.endswith(".txt") for line in lines)
+
+
+def test_note_is_charged_to_the_listing_budget_and_survives_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from context_loader.model import DIRECTORY_TREE_LIMIT_BYTES
+
+    cap = 3
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    for index in range(40):
+        directory = repo / f"cap{index:03d}"
+        directory.mkdir()
+        for name in range(cap + 1):
+            (directory / f"e{name}.txt").write_text("x\n", encoding="utf-8")
+    for index in range(400):
+        (repo / f"very-long-root-entry-name-{index:04d}-padding.txt").write_text("z\n", "utf-8")
+
+    result, _document = _load(repo)
+    lines, section = _tree(result)
+    note = [line for line in section.splitlines() if line.startswith("Listing incomplete:")]
+
+    assert len(note) == 1, "the claim must survive a saturated budget"
+    assert len("\n".join(lines).encode("utf-8")) + len(note[0].encode("utf-8")) + 2 <= (
+        DIRECTORY_TREE_LIMIT_BYTES
+    )
+
+
+def test_incomplete_reporting_is_deterministic_across_repeated_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cap = 17
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    _capped_directories(repo, 15, cap)
+
+    first, first_document = _load(repo)
+    second, second_document = _load(repo)
+    assert first.context == second.context
+    assert first_document["statuses"] == second_document["statuses"]
+    assert first_document["context_sha256"] == second_document["context_sha256"]

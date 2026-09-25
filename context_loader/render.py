@@ -40,6 +40,7 @@ class MarkdownRender:
     omitted_sections: tuple[str, ...]
     changes_truncated: bool
     commands_truncated: bool
+    tree_truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,21 +302,29 @@ def _incomplete_directory_note(tree: DirectoryTree) -> str:
     stem = "directory" if tree.incomplete_count == 1 else "directories"
     limit = tree.enumeration_limit
     return (
-        f"Listing incomplete: {tree.incomplete_count} {stem} exceeded the "
-        f"{limit}-entry per-directory enumeration limit, so only the alphabetically first "
-        f"{limit} of each was examined. Named here: {examples}."
+        f"Listing incomplete: {tree.incomplete_count} {stem} held more entries than the "
+        f"{limit}-entry per-directory enumeration limit, so each contributed only its "
+        f"alphabetically first {limit} names to this listing. Named here: {examples}."
     )
 
 
-def _render_directory_tree(tree: DirectoryTree) -> str:
+def _render_directory_tree(tree: DirectoryTree) -> tuple[str, bool]:
+    """Render the tree section and report whether this render cut the listing itself.
+
+    The second value is the renderer's own claim: the collected listing can be complete and
+    still not fit the section budget, and a reader of the machine formats must not have to
+    look for the marker inside rendered text to learn that.
+    """
     lines = [_tree_line(entry) for entry in tree.entries]
     if not lines:
         lines.append("No entries.")
     note = _incomplete_directory_note(tree) if tree.incomplete_count else ""
-    # Charged to this section's own budget before the listing is cut: capped directories can
-    # never inflate the section, and at most one listing line can ever yield to the claim.
+    # Charged to the listing's own byte budget before the listing is cut, so the section stays
+    # bounded however many directories are capped. The cost is paid in listing lines: the note
+    # reserves room for itself, so a longer note can displace several listing lines, and the
+    # truncation marker plus `truncated` then say so.
     reserve = len(note.encode("utf-8")) + 2 if note else 0
-    body, _truncated = _bounded_lines(
+    body, cut_by_budget = _bounded_lines(
         lines,
         max(0, DIRECTORY_TREE_LIMIT_BYTES - reserve),
         already_truncated=tree.truncated,
@@ -323,7 +332,7 @@ def _render_directory_tree(tree: DirectoryTree) -> str:
     parts = ["## Directory Tree", "", _fenced("text", body)]
     if note:
         parts.extend(("", note))
-    return "\n".join(parts)
+    return "\n".join(parts), cut_by_budget
 
 
 def _omitted_section(title: str) -> str:
@@ -342,6 +351,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
     )
     commands_section, commands_truncated = _render_commands(project.commands)
     changes_truncated = _change_lines(state)[1]
+    tree_section, tree_truncated = _render_directory_tree(project.directory_tree)
     sections: list[tuple[str, str | None]] = [
         ("Git State", _render_git_state(state)),
         (
@@ -359,7 +369,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
         ("Declared Commands", commands_section),
         ("Project Entry Files", _render_entry_files(project.entry_files)),
         ("Recent Commits", _render_recent_commits(state.commits)),
-        ("Directory Tree", _render_directory_tree(project.directory_tree)),
+        ("Directory Tree", tree_section),
     ]
 
     rendered_parts = [header.encode()]
@@ -396,6 +406,7 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
         included_sections=tuple(included_sections),
         omitted_sections=tuple(omitted_sections),
         changes_truncated=changes_truncated,
+        tree_truncated=tree_truncated,
         commands_truncated=commands_truncated,
     )
 

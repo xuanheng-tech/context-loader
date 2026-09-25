@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
@@ -70,6 +70,10 @@ class ContextStatus:
     code: str
     subject_kind: str
     subject: str
+    # The raw fact behind the displayed subject. Display escaping is not injective, so
+    # deduplication must key on this and never on `subject`, or two different directories
+    # could collapse into one claim. It is not serialized.
+    identity: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,8 +132,10 @@ def _sources(
     return tuple(sources)
 
 
-def _status(code: str, subject_kind: str, subject: str) -> ContextStatus:
-    return ContextStatus(code=code, subject_kind=subject_kind, subject=subject)
+def _status(code: str, subject_kind: str, subject: str, identity: str = "") -> ContextStatus:
+    return ContextStatus(
+        code=code, subject_kind=subject_kind, subject=subject, identity=identity or subject
+    )
 
 
 def _statuses_for_source(source: CollectedFile) -> list[ContextStatus]:
@@ -154,6 +160,7 @@ def _build_statuses(
     omitted_sections: tuple[str, ...],
     changes_truncated: bool,
     commands_truncated: bool,
+    tree_truncated: bool,
     rendered_bodies: tuple[RenderedSourceBody, ...],
 ) -> tuple[ContextStatus, ...]:
     statuses: list[ContextStatus] = []
@@ -179,26 +186,35 @@ def _build_statuses(
     if changes_truncated:
         statuses.append(_status("truncated", "changes", "Working Tree Changes"))
 
-    if project.directory_tree.truncated:
+    if project.directory_tree.truncated or tree_truncated:
         statuses.append(_status("truncated", "tree", "Directory Tree"))
     for entry in project.directory_tree.entries:
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
             statuses.append(_status("unreadable", "tree_entry", display_text(subject)))
     tree = project.directory_tree
-    for path in tree.incomplete_directories:
+    named = list(dict.fromkeys(tree.incomplete_directories))
+    for path in named:
         subject = path if path else "."
         statuses.append(
-            _status("directory_listing_incomplete", "tree_entry", display_text(subject))
+            _status(
+                "directory_listing_incomplete",
+                "tree_entry",
+                display_text(subject),
+                identity=path,
+            )
         )
-    unnamed = tree.incomplete_count - len(tree.incomplete_directories)
+    unnamed = tree.incomplete_count - len(named)
     if unnamed > 0:
+        stem = "directory" if unnamed == 1 else "directories"
         statuses.append(
             _status(
                 "directory_listing_incomplete",
                 "tree",
-                f"{tree.incomplete_count} directories exceed the {tree.enumeration_limit}"
-                f"-entry enumeration limit; {unnamed} of them are not named individually",
+                f"{tree.incomplete_count} directories exceeded the "
+                f"{tree.enumeration_limit}-entry per-directory enumeration limit; "
+                f"{unnamed} further {stem} not named individually",
+                identity=f"aggregate:{tree.incomplete_count}:{unnamed}",
             )
         )
     for title in omitted_sections:
@@ -212,7 +228,7 @@ def _build_statuses(
     deduped: list[ContextStatus] = []
     seen: set[tuple[str, str, str]] = set()
     for status in statuses:
-        key = (status.code, status.subject_kind, status.subject)
+        key = (status.code, status.subject_kind, status.identity)
         if key in seen:
             continue
         seen.add(key)
@@ -245,6 +261,7 @@ def load_project_context(
         omitted_sections=rendered.omitted_sections,
         changes_truncated=rendered.changes_truncated,
         commands_truncated=rendered.commands_truncated,
+        tree_truncated=rendered.tree_truncated,
         rendered_bodies=rendered_bodies,
     )
     return ProjectContextResult(

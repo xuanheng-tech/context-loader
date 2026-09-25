@@ -184,7 +184,7 @@ context, in assembly order, after the existing newline normalization and truncat
 distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
 only `repository` sources and does not add any global-file discovery.
 
-`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, directory-tree entries whose directory holds more entries than one enumeration examines, sections omitted under the global output budget, truncated working-tree or declared-command listings, and truncated nested-`AGENTS.md` presence reports. A skipped or absent source reports the code of the condition the collector observed (`not_present`, `skipped_symlink`, `skipped_not_regular`, `skipped_encoding`, `skipped_unreadable`); the sentence in `context` is rendered from that same condition, so wording and code cannot drift apart. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
+`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, directory-tree entries whose directory holds more entries than one enumeration examines, sections omitted under the global output budget, truncated working-tree, declared-command or directory-tree listings, and truncated nested-`AGENTS.md` presence reports. A skipped or absent source reports the code of the condition the collector observed (`not_present`, `skipped_symlink`, `skipped_not_regular`, `skipped_encoding`, `skipped_unreadable`); the sentence in `context` is rendered from that same condition, so wording and code cannot drift apart. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
@@ -316,16 +316,27 @@ bullet is a per-component, read or capture bound, as each one states:
 - Each entry file: 8 KiB
 - All entry-file bodies: 24 KiB
 - Declared commands: 8 KiB
-- Directory tree: 12 KiB, 300 entries, and depth 2. Each directory is enumerated up to 512
-  entries, keeping the alphabetically first names so the listing never depends on operating
-  system order; a directory that holds more is named by a `Listing incomplete:` line after the
-  listing and a `directory_listing_incomplete` status entry, so a partial listing is never
-  presented as a complete one. A directory's own entries are listed before any of its
-  subdirectories are descended into, and its own files keep a share of the item budget, so a
-  root `README.md` is not displaced by hundreds of top-level directories. That priority holds only
-  while the directory's own enumeration stays below the 512-entry cap; a capped directory is
-  reported as incomplete by one bounded `Listing incomplete:` line (total, cap, up to three names)
-  that is charged to the same 12 KiB, and no particular file is guaranteed to survive the cap.
+- Directory tree: 12 KiB of listing body, 300 entries, and depth 2. Each directory is
+  enumerated up to 512 entries, keeping the alphabetically first names so the listing never
+  depends on operating system order. A directory that holds more is reported by a single
+  `Listing incomplete:` line stating the total, the limit and up to three names, and by at most
+  eight `directory_listing_incomplete` status entries naming individual directories plus one
+  aggregate entry giving the totals when more directories were capped than are named: beyond the
+  retained examples a capped directory is counted but not individually named, and no listing
+  claims completeness it does not have.
+  Two limits act in sequence and a guarantee depends on both. The 512-entry enumeration limit
+  decides which names a directory offers at all; above it only an alphabetical prefix is ever
+  seen. The 300-entry item budget, split between a directory's subdirectories and its
+  non-directories so neither group can crowd the other out entirely, decides which offered names
+  are kept. Descent happens after a directory's own entries, so deep content cannot displace
+  top-level names: a root `README.md` is listed whenever the root is not enumeration-capped and
+  the item budget still has room. When either limit bites, the listing is reported as incomplete
+  and no particular file is guaranteed to survive.
+  The `Listing incomplete:` line is charged to the 12 KiB listing budget before the body is cut,
+  so the claim can never inflate the section; its cost is paid in listing bytes, so a long note
+  removes that many bytes of entries, and the `truncated` status plus the marker inside the
+  fence say so. The heading and the code-fence lines are not metered, so the whole Markdown
+  section can exceed 12 KiB by that fixed few dozen bytes.
 - Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths, a
   4 KiB budget metered on the emitted array, and at most 1,024 entries examined per directory;
   file contents are never read
