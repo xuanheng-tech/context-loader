@@ -12,8 +12,8 @@ from .git import RecentCommit, RepositoryState
 from .model import (
     AGENTS_LIMIT_BYTES,
     DECLARED_COMMANDS_LIMIT_BYTES,
+    DIRECTORY_TREE_INCOMPLETE_NOTE_EXAMPLES,
     DIRECTORY_TREE_LIMIT_BYTES,
-    DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
     ENTRY_FILE_LIMIT_BYTES,
     ENTRY_FILES_TOTAL_LIMIT_BYTES,
     README_LIMIT_BYTES,
@@ -288,12 +288,22 @@ def _tree_line(entry: TreeEntry) -> str:
     return path
 
 
-def _incomplete_directory_note(path: str) -> str:
-    subject = display_text(path) if path else "."
+def _incomplete_directory_note(tree: DirectoryTree) -> str:
+    """One bounded line whose every number is something the collection actually observed."""
+    shown = tree.incomplete_directories[:DIRECTORY_TREE_INCOMPLETE_NOTE_EXAMPLES]
+    examples = ", ".join(f"`{display_text(path) if path else '.'}`" for path in shown)
+    further = len(tree.incomplete_directories) - len(shown)
+    if further > 0:
+        examples += f" (+{further} more named in statuses)"
+    unnamed = tree.incomplete_count - len(tree.incomplete_directories)
+    if unnamed > 0:
+        examples += f" ({unnamed} further directories left unnamed here)"
+    stem = "directory" if tree.incomplete_count == 1 else "directories"
+    limit = tree.enumeration_limit
     return (
-        f"Listing incomplete: {subject} holds more than "
-        f"{DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY} directory entries, so only the "
-        f"alphabetically first {DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY} were examined."
+        f"Listing incomplete: {tree.incomplete_count} {stem} exceeded the "
+        f"{limit}-entry per-directory enumeration limit, so only the alphabetically first "
+        f"{limit} of each was examined. Named here: {examples}."
     )
 
 
@@ -301,14 +311,18 @@ def _render_directory_tree(tree: DirectoryTree) -> str:
     lines = [_tree_line(entry) for entry in tree.entries]
     if not lines:
         lines.append("No entries.")
+    note = _incomplete_directory_note(tree) if tree.incomplete_count else ""
+    # Charged to this section's own budget before the listing is cut: capped directories can
+    # never inflate the section, and at most one listing line can ever yield to the claim.
+    reserve = len(note.encode("utf-8")) + 2 if note else 0
     body, _truncated = _bounded_lines(
         lines,
-        DIRECTORY_TREE_LIMIT_BYTES,
+        max(0, DIRECTORY_TREE_LIMIT_BYTES - reserve),
         already_truncated=tree.truncated,
     )
     parts = ["## Directory Tree", "", _fenced("text", body)]
-    for path in tree.incomplete_directories:
-        parts.extend(("", _incomplete_directory_note(path)))
+    if note:
+        parts.extend(("", note))
     return "\n".join(parts)
 
 

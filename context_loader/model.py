@@ -26,6 +26,10 @@ DIRECTORY_TREE_MAX_DEPTH = 2
 # be decided by the item budget and its root-file guarantee, not by enumeration order.
 # It is still a hard cap, so one huge directory can never be materialised in memory.
 DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY = 512
+# A capped directory is reported once as a number plus a bounded set of examples, so the
+# completeness claim cannot itself inflate the section it describes.
+DIRECTORY_TREE_INCOMPLETE_NOTE_EXAMPLES = 3
+DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT = 8
 NESTED_AGENTS_MAX_DEPTH = 4
 NESTED_AGENTS_MAX_DIRECTORIES = 2_000
 NESTED_AGENTS_MAX_FILES = 32
@@ -143,15 +147,22 @@ class TreeEntry:
 class DirectoryTree:
     """A bounded directory listing that never overstates what it examined.
 
-    ``truncated`` claims that entries exist beyond this listing, and
-    ``incomplete_directories`` names each directory (repository-relative, ``.`` for the root)
-    that holds more entries than one enumeration examines, so a partial listing of that
-    directory is never presented as a complete one.
+    ``truncated`` claims that entries exist beyond this listing. A directory holding more
+    entries than one enumeration examines is counted in ``incomplete_count`` against
+    ``enumeration_limit``, and ``incomplete_directories`` retains only the first
+    ``DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT`` of them, so a partial listing of a directory is
+    never presented as a complete one and the claim stays bounded however many hit the cap.
+
+    Root-level files are listed ahead of descent only while the root's own enumeration stays
+    below ``enumeration_limit``. Once a directory is capped, the retained names are simply the
+    alphabetically first ones and this listing makes no claim about which files survived.
     """
 
     entries: tuple[TreeEntry, ...]
     truncated: bool = False
     incomplete_directories: tuple[str, ...] = ()
+    incomplete_count: int = 0
+    enumeration_limit: int = 0
 
 
 @dataclass(frozen=True, slots=True)

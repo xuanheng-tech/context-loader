@@ -322,7 +322,10 @@ bullet is a per-component, read or capture bound, as each one states:
   listing and a `directory_listing_incomplete` status entry, so a partial listing is never
   presented as a complete one. A directory's own entries are listed before any of its
   subdirectories are descended into, and its own files keep a share of the item budget, so a
-  root `README.md` is not displaced by hundreds of top-level directories.
+  root `README.md` is not displaced by hundreds of top-level directories. That priority holds only
+  while the directory's own enumeration stays below the 512-entry cap; a capped directory is
+  reported as incomplete by one bounded `Listing incomplete:` line (total, cap, up to three names)
+  that is charged to the same 12 KiB, and no particular file is guaranteed to survive the cap.
 - Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths, a
   4 KiB budget metered on the emitted array, and at most 1,024 entries examined per directory;
   file contents are never read

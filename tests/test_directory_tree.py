@@ -102,10 +102,14 @@ def test_enumeration_cap_claims_an_incomplete_root_listing(tmp_path: Path) -> No
 
     assert lines[-1] == MARKER
     assert len(lines) - 1 <= DIRECTORY_TREE_MAX_ITEMS
-    assert (
-        f"Listing incomplete: . holds more than {TREE_CAP} directory entries, so only the "
-        f"alphabetically first {TREE_CAP} were examined." in section
-    )
+    notes = [
+        line for line in document["context"].splitlines() if line.startswith("Listing incomplete:")
+    ]
+    assert notes == [
+        f"Listing incomplete: 1 directory exceeded the {TREE_CAP}-entry per-directory "
+        f"enumeration limit, so only the alphabetically first {TREE_CAP} of each was "
+        f"examined. Named here: `.`."
+    ]
     assert _incomplete_subjects(document) == ["."]
     assert {
         "code": "truncated",
@@ -134,10 +138,12 @@ def test_enumeration_cap_is_attributed_to_the_directories_that_hit_it(
 
     notes = [line for line in section.splitlines() if line.startswith("Listing incomplete:")]
     assert _incomplete_subjects(document) == ["deep", "wide"]
-    assert len(notes) == 2
-    assert any(note.startswith("Listing incomplete: deep holds") for note in notes)
-    assert any(note.startswith("Listing incomplete: wide holds") for note in notes)
-    assert not any(note.startswith("Listing incomplete: . holds") for note in notes)
+    assert len(notes) == 1
+    assert "2 directories exceeded" in notes[0]
+    assert "`deep`" in notes[0] and "`wide`" in notes[0]
+    assert "` .`" not in notes[0]
+    # The root itself was enumerated whole, so it is not among the named incomplete ones.
+    assert "`.`" not in notes[0]
     # The nested presence scan keeps its own, much larger enumeration budget, so the
     # tree cap must not leak into it.
     assert document["nested_context"]["scan_truncated"] is False

@@ -30,17 +30,30 @@ dates.
   lines after that entry appear in a different order than in 1.3.1, which changes the
   `## Directory Tree` body inside `context` and therefore `context_sha256`. The tree's budgets
   (12 KiB, 300 entries, depth 2), the meaning of `truncated`, the entry kinds and every JSON key are
-  unchanged.
+  unchanged, and the 12 KiB bound now also meters the incompleteness claim described below, so the
+  section cannot exceed it however many directories are capped.
 - Added: directory enumeration is capped per directory — 512 entries for the tree, 1,024 for the
   nested `AGENTS.md` presence scan — and the retained entries are the alphabetically first names, so
   a single huge directory is no longer materialised whole and a capped listing does not depend on
-  operating-system enumeration order. Each scan keeps its own budget and its own truncation signal: a
-  directory above the tree cap is named after the listing and by a new `directory_listing_incomplete`
-  `statuses` entry, and a directory above the scan cap sets the existing `scan_truncated` flag and
+  operating-system enumeration order. Each scan keeps its own budget and its own truncation signal.
+  Capped tree directories are reported by exactly one `Listing incomplete:` line carrying the total
+  count, the limit that was applied and up to three example names, charged against the tree's own
+  12 KiB so the claim can never inflate the section it describes, and by at most eight
+  `directory_listing_incomplete` `statuses` entries plus one aggregate entry naming the total when
+  more directories were capped than are listed individually. Previously each capped directory
+  produced its own unbounded note, which pushed the measured section to 12,973 bytes past its
+  12 KiB budget on a 120-directory fixture and could then squeeze the listing itself out through the
+  global fit check. A directory above the nested-scan cap sets the existing `scan_truncated` flag and
   `nested_agents_scan_truncated` status. No JSON key set changes, so `schema_version` stays 3/4.
 - Added: when a directory's own entries no longer fit the tree item budget, its files keep a share of
-  that budget, so a root `README.md` remains listed in a root holding more than 320 directories
-  instead of being crowded out by alphabetically-earlier directories.
+  that budget, so a root `README.md` stays listed in a root holding more than 320 directories instead
+  of being crowded out by alphabetically-earlier directories. This guarantee is conditional and now
+  stated as such: it holds while that directory's own enumeration stays below the 512-entry
+  per-directory cap. A root with more entries than the cap is enumerated incompletely, so no name is
+  guaranteed to survive it; the listing then says the count, the limit and the retained examples, and
+  claims nothing about what was omitted. Measured on a 600-root-directory tree the root files are
+  still listed and the incompleteness is reported; on a shape where they are not, the report is the
+  guarantee, not the listing.
 - Changed: the shared limits and frozen value types move to `context_loader/model.py` and the safe,
   bounded filesystem primitives to `context_loader/filesystem.py`; `collect.py` keeps collection
   policy, `render.py` derives display text from the typed reason, and no output changes from the move

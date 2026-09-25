@@ -26,6 +26,7 @@ from .model import (
     AGENTS_LIMIT_BYTES,
     AGENTS_PATH_LIMIT_BYTES,
     AGENTS_SCAN_LIMIT_BYTES,
+    DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT,
     DIRECTORY_TREE_MAX_DEPTH,
     DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
     DIRECTORY_TREE_MAX_ITEMS,
@@ -760,11 +761,12 @@ def _entry_slots(directories: int, others: int, remaining: int) -> tuple[int, in
 def _collect_directory_tree(root: Path) -> DirectoryTree:
     """List one repository tree root-first, with a bounded and honest enumeration.
 
-    A directory's own entries are listed before any of its subdirectories is descended
-    into, so the repository's top-level files cannot be displaced by deep or
-    alphabetically-early sibling directories. Every directory is enumerated under a
-    per-directory entry cap, and a directory that holds more entries than that cap is
-    recorded as incomplete rather than presented as fully listed.
+    A directory's own entries are listed before any of its subdirectories is descended into,
+    which keeps the repository's top-level files visible for as long as the root's own
+    enumeration stays below the per-directory cap. Once a directory is capped the retained
+    names are simply the alphabetically first ones, and nothing here claims which files
+    survived. Every capped directory is counted and only a bounded number of examples is kept,
+    so the completeness claim cannot itself grow the listing.
     """
     collected: list[TreeEntry] = []
     incomplete: list[str] = []
@@ -836,7 +838,14 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
                 collected.append(TreeEntry("", "unreadable_directory"))
     finally:
         os.close(root_descriptor)
-    return DirectoryTree(tuple(collected), truncated, tuple(sorted(incomplete)))
+    ordered = sorted(incomplete)
+    return DirectoryTree(
+        tuple(collected),
+        truncated,
+        tuple(ordered[:DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT]),
+        len(ordered),
+        DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
+    )
 
 
 def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:

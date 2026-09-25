@@ -185,10 +185,21 @@ def _build_statuses(
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
             statuses.append(_status("unreadable", "tree_entry", display_text(subject)))
-    for path in project.directory_tree.incomplete_directories:
+    tree = project.directory_tree
+    for path in tree.incomplete_directories:
         subject = path if path else "."
         statuses.append(
             _status("directory_listing_incomplete", "tree_entry", display_text(subject))
+        )
+    unnamed = tree.incomplete_count - len(tree.incomplete_directories)
+    if unnamed > 0:
+        statuses.append(
+            _status(
+                "directory_listing_incomplete",
+                "tree",
+                f"{tree.incomplete_count} directories exceed the {tree.enumeration_limit}"
+                f"-entry enumeration limit; {unnamed} of them are not named individually",
+            )
         )
     for title in omitted_sections:
         statuses.append(_status("section_omitted", "section", title))
