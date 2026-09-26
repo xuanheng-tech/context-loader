@@ -206,6 +206,39 @@ def test_root_files_stay_visible_when_subdirectories_exceed_the_item_budget(
     assert "Listing incomplete" not in section
 
 
+def test_a_capped_root_lists_everything_its_prefix_offered_and_nothing_more(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The enumeration cut is positional, not a verdict on the whole directory.
+
+    A root above the cap still offers its alphabetically first names, so an early-sorting file is
+    listed from a capped root and only the tail is lost. Wording that made an uncapped root a
+    precondition for listing any root file would be false on this fixture.
+    """
+    cap = 8
+    monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
+    repo = _repository(tmp_path)
+    for index in range(cap - 1):
+        (repo / f"q{index}").mkdir()
+    (repo / "EARLY.md").write_text("# overview\n", encoding="utf-8")
+    (repo / "z-late.md").write_text("# tail\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    lines, _section = _tree(result)
+
+    # `.git`, EARLY.md and q0..q5 fill the cap; q6, tracked.txt and z-late.md are never offered.
+    assert _incomplete_subjects(document) == ["."]
+    assert "EARLY.md" in lines
+    for dropped in ("q6", "tracked.txt", "z-late.md"):
+        assert dropped not in lines
+    assert {
+        "code": "truncated",
+        "subject": "Directory Tree",
+        "subject_kind": "tree",
+    } in document["statuses"]
+
+
 def test_root_level_files_are_listed_before_any_descendant(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     source = repo / "src"

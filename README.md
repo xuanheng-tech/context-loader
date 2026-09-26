@@ -332,11 +332,15 @@ bullet is a per-component, read or capture bound, as each one states:
   prefix is ever seen. The 300-entry item budget is then shared between a directory's
   subdirectories and its non-directories: each may take up to half of what remains before the other
   claims the surplus, which stops alphabetically-earlier directories from evicting every file, but
-  it is a share rather than a floor -- with a single slot left the non-directories take it. The 12 KiB listing budget then decides which kept names are rendered. Descent
+  it is a share rather than a floor -- with a single slot left the non-directories take it. The 12
+  KiB listing budget then decides which kept names are rendered. Descent
   happens after a directory's own entries, so deep content cannot displace top-level names, but
-  the tool promises no specific file: a root `README.md` is listed only when the root is not
-  enumeration-capped, the entry budget still has a slot, and the byte budget still has room, and
-  each of those three can fail on its own. Whenever one bites, the listing says so through the
+  the tool promises no specific file: a root `README.md` is listed only when all three limits leave
+  room for it -- the enumeration offered it, the entry budget still has a slot, and the byte budget
+  still has room -- and each of those three can fail on its own. Being offered is not the same as
+  an uncapped root: the 512-entry cut drops only the names that sort after its retained prefix, so
+  an early-sorting `README.md` is still listed from a capped root while a late-sorting one never
+  reaches the listing. Whenever one of the three bites, the listing says so through the
   note, the marker, or a `truncated` status instead of presenting itself as complete.
   The `Listing incomplete:` line is charged to the 12 KiB listing budget before the body is cut,
   so the claim can never inflate the section; its cost is paid in listing bytes, so a long note

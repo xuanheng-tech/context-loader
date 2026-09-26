@@ -64,9 +64,11 @@ disclosed through their parent's truncation rather than as separate numbers. Pre
 - Added: when a directory's own entries no longer fit the tree item budget, its subdirectories and
   its non-directories each keep a share of it, so alphabetically-earlier directories cannot crowd
   out a root `README.md` entirely. The precondition is now stated exactly, and it is three limits
-  rather than two: the root must be enumerated without hitting the 512-entry cap, the 300-entry
-  budget must still have a slot, and the 12 KiB listing budget must still have room to render the
-  line. Any one of them can drop a name on its own, so the tool promises no specific file; where a
+  rather than two: the enumeration must have offered the name, the 300-entry budget must still have
+  a slot, and the 12 KiB listing budget must still have room to render the line. Being offered is
+  not the same as an uncapped root -- the 512-entry cut drops only the names sorting after its
+  retained prefix, so a `README.md` that sorts early is still listed from a capped root. Any one of
+  them can drop a name on its own, so the tool promises no specific file; where a
   limit bites the listing reports the count, the cap and its retained examples instead of
   implying completeness.
 - Fixed: a directory tree shortened by its own 12 KiB render budget is now reported in the machine

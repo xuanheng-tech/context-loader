@@ -771,14 +771,15 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
        a share of the remaining budget, so one group cannot crowd the other out entirely.
 
     Descending happens after a directory's own names are kept, so deep content cannot displace
-    top-level names. A root-level non-directory is listed only when all three limits leave room for
-    it: the root must be enumerated without hitting the enumeration cap, the item budget must still
-    have a slot, and the section's byte budget must still have room to render the line. Each limit
-    bites independently -- a capped root keeps only an alphabetical prefix, a short item budget
-    drops offered names, and a full byte budget drops rendered lines -- so no single one of them
-    is sufficient. Every case is reported as incomplete or truncated rather than presented as a
-    full listing, and capped directories are counted in full while only a bounded set of examples
-    is retained, so the claim cannot itself grow the listing.
+    top-level names. A root-level non-directory is listed only when those two limits and the
+    section's own byte budget, applied in :mod:`context_loader.render`, all leave room for it: the
+    enumeration must offer it, the item budget must still have a slot, and the byte budget must
+    still have room to render the line. Being offered means surviving the alphabetical cut, not an
+    uncapped directory -- a capped root still lists every offered name whose group keeps a slot,
+    and never offers anything sorting after its retained prefix. Each limit bites on its own, so no
+    single one of them is sufficient. Every case is reported as incomplete or truncated rather than
+    presented as a full listing, and capped directories are counted in full while only a bounded set
+    of examples is retained, so the claim cannot itself grow the listing.
     """
     collected: list[TreeEntry] = []
     incomplete: list[str] = []
