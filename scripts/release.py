@@ -116,7 +116,17 @@ def check_readme_version(readme: str, version: str, package: str = PACKAGE) -> N
 def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = False) -> dict:
     if TAG_RE.fullmatch(tag) is None:
         raise ReleaseError("invalid formal release tag")
+    tag_object = command("git", "rev-parse", f"refs/tags/{tag}")
     commit = command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
+    if command("git", "cat-file", "-t", tag_object) == "tag":
+        header = command("git", "cat-file", "tag", tag_object).split("\n\n", 1)[0]
+        lines = header.splitlines()
+        if (
+            len(lines) != 4
+            or lines[:3] != [f"object {commit}", "type commit", f"tag {tag}"]
+            or re.fullmatch(r"tagger [^\x00\r\n]+", lines[3]) is None
+        ):
+            raise ReleaseError("raw annotated tag name/target conflict")
     if expected_sha is not None and commit != expected_sha:
         raise ReleaseError("tag/expected commit mismatch")
     if checkout and command("git", "rev-parse", "HEAD") != commit:

@@ -108,6 +108,8 @@ and bare repositories are rejected in every mode.
 `--focus` and `--path` are optional, bounded selection signals for the root `AGENTS.md`. `--path`
 must be repository-relative. The collector does not retain either input in output or audit data.
 Calls that omit both options remain valid and use the conservative fallback described below.
+Each value option (`--repo`, `--focus`, `--path`, `--format`) may be supplied once;
+duplicates are rejected before collection rather than silently overriding an earlier value.
 
 ## Markdown Output
 
@@ -430,6 +432,7 @@ PyPI file bytes, metadata and SHA-256, plus the publisher/tag/commit claims in P
 provenance. This is an identity check, not an independent cryptographic Sigstore verifier.
 
 - Tag/version or expected-commit mismatch and `just check` failure stop before build/upload.
+- Annotated tag headers must match the exact tag name and commit, without extra or duplicate headers.
 - The build refuses to run unless `dist/` is empty, and refuses any produced file set other than
   the current version's wheel and sdist. A leftover artifact can carry a release filename while
   holding different bytes, so it is never treated as the current release.

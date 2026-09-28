@@ -72,6 +72,75 @@ def test_exact_commit_is_required(repository: Path) -> None:
         r.identity(TAG, SHA)
 
 
+@pytest.mark.parametrize(
+    "extra_header", ["object {commit}", "type commit", "tag v9.9.9", "encoding UTF-8"]
+)
+def test_annotated_release_rejects_extra_headers(repository: Path, extra_header: str) -> None:
+    commit = r.command("git", "rev-parse", "HEAD")
+    raw = (
+        f"object {commit}\ntype commit\ntag {TAG}\n"
+        "tagger Fixture <fixture@example.invalid> 1 +0000\n"
+        + extra_header.format(commit=commit)
+        + "\n\nFixture\n"
+    )
+    tag_object = subprocess.run(
+        ["git", "hash-object", "-w", "--literally", "-t", "tag", "--stdin"],
+        input=raw,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    subprocess.run(["git", "update-ref", f"refs/tags/{TAG}", tag_object], check=True)
+    with pytest.raises(r.ReleaseError, match="raw annotated tag"):
+        r.identity(TAG)
+
+
+def test_annotated_release_header_must_match_ref_name(repository: Path) -> None:
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "tag.gpgsign=false",
+            "tag",
+            "-a",
+            "v9.9.9",
+            "-m",
+            "Fixture",
+        ],
+        check=True,
+    )
+    tag_object = r.command("git", "rev-parse", "refs/tags/v9.9.9")
+    subprocess.run(["git", "update-ref", f"refs/tags/{TAG}", tag_object], check=True)
+    with pytest.raises(r.ReleaseError, match="raw annotated tag"):
+        r.identity(TAG)
+
+
+def test_valid_annotated_release_keeps_existing_identity(repository: Path) -> None:
+    lightweight = r.identity(TAG)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "tag.gpgsign=false",
+            "tag",
+            "-fa",
+            TAG,
+            "-m",
+            "Fixture",
+        ],
+        check=True,
+    )
+    assert r.identity(TAG) == lightweight
+
+
 def test_real_quality_failure_stops_before_network_or_build(
     repository: Path, tmp_path: Path
 ) -> None:

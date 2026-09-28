@@ -1,5 +1,8 @@
 .pytest_cache/
 .ruff_cache/
 .venv/
+.qoder/
+dist/
+pending-dist/
 __pycache__/
 *.py[cod]

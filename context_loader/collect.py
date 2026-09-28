@@ -63,7 +63,7 @@ _JUST_RECIPE_RE = re.compile(
 _JUST_ATTRIBUTE_RE = re.compile(r"^\[([^\]]+)\][ \t]*$")
 _MAKE_TARGET_RE = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9_.-]*"
-    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.-]*)*)[ \t]*:(?![:=])"
+    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.-]*)*)[ \t]*(?:::|:)(?![:=])"
 )
 _ATX_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$")
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -698,7 +698,7 @@ def _just_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
         attribute = _JUST_ATTRIBUTE_RE.fullmatch(line)
         if attribute is not None:
             names = {item.strip() for item in attribute.group(1).split(",")}
-            pending_private = "private" in names
+            pending_private = pending_private or "private" in names
             continue
         if re.match(r"^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_-]*[ \t]*(?::=|\?=|\+=|=)", line):
             pending_private = False
@@ -720,7 +720,10 @@ def _make_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
         ):
             continue
         match = _MAKE_TARGET_RE.match(line)
-        if match is None or "%" in line or "$" in line or "=" in line[match.end() :]:
+        if match is None:
+            continue
+        prerequisites = line[match.end() :].split(";", 1)[0]
+        if "=" in prerequisites:
             continue
         targets.update(match.group(1).split())
     return tuple(DeclaredCommand(source.name, f"make {name}") for name in sorted(targets))

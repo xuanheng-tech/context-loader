@@ -17,6 +17,21 @@ class SafeArgumentParser(argparse.ArgumentParser):
         raise ContextLoaderError("invalid command-line arguments", exit_code=2)
 
 
+class _OnceAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str,
+        option_string: str | None = None,
+    ) -> None:
+        seen = f"_seen_{self.dest}"
+        if getattr(namespace, seen, False):
+            parser.error("option supplied more than once")
+        setattr(namespace, seen, True)
+        setattr(namespace, self.dest, values)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(
         prog="project-context",
@@ -24,20 +39,25 @@ def _parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--repo", required=True, help="absolute Git worktree path")
+    parser.add_argument(
+        "--repo", required=True, action=_OnceAction, help="absolute Git worktree path"
+    )
     parser.add_argument(
         "--focus",
+        action=_OnceAction,
         help="optional bounded task focus used for deterministic AGENTS section selection",
     )
     parser.add_argument(
         "--path",
         dest="target_path",
+        action=_OnceAction,
         help="optional repository-relative target path used for AGENTS section selection",
     )
     parser.add_argument(
         "--format",
         choices=("markdown", "json", "json-compact"),
         default="markdown",
+        action=_OnceAction,
         help=(
             "output format (default: markdown); json-compact omits the "
             "duplicated source bodies (see README, Compact model consumption)"

@@ -6,6 +6,11 @@ dates.
 
 ## Unreleased
 
+- Preserve private Just recipes across stacked attributes, recognize literal Make targets
+  with double-colon rules and inline recipes, and reject duplicate value options before collection.
+- Refuse conflicting or duplicate annotated-tag headers before release identity checks.
+- Ignore local Qoder sessions and release build output at repository level for isolated Git audits.
+
 - Docs: tighten the release-notes claims that a post-release audit could not reproduce from the
   published artifacts. The 1.3.1 "Preserve" note is exact only for Markdown: `--format json` and
   `--format json-compact` embed `tool.version`, so their bytes differ from 1.3.0 by that one string,

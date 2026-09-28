@@ -830,6 +830,64 @@ $(GENERATED):
     assert "{broken json" in entries
 
 
+@pytest.mark.parametrize("attributes", ["[private]\n[group('internal')]", "[no-cd]\n[private]"])
+def test_stacked_just_attributes_preserve_private_recipes(tmp_path: Path, attributes: str) -> None:
+    repo = _repository(tmp_path)
+    (repo / "justfile").write_text(f"{attributes}\nsecret:\npublic:\n", encoding="utf-8")
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    commands = _section(result.stdout.decode(), "Declared Commands", "Project Entry Files")
+    assert commands.splitlines() == ["- `just public`"]
+
+
+def test_literal_make_targets_do_not_depend_on_prerequisites_or_inline_recipes(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    (repo / "Makefile").write_text(
+        "check::\nlint: ; tool --option=value\nreport: ; date +%F\n"
+        "build: $(SOURCES)\nVALUE ::= ignored\nlocal: VALUE=ignored\n",
+        encoding="utf-8",
+    )
+
+    result = _run(repo)
+
+    assert result.returncode == 0
+    commands = _section(result.stdout.decode(), "Declared Commands", "Project Entry Files")
+    assert commands.splitlines() == [
+        "- `make build`",
+        "- `make check`",
+        "- `make lint`",
+        "- `make report`",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--repo", "/private/argument"),
+        ("--focus", "topic"),
+        ("--path", "src"),
+        ("--format", "json"),
+    ],
+)
+def test_duplicate_single_value_options_are_rejected_without_collecting(
+    flag: str, value: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from context_loader import cli
+
+    def unexpected_collection(*args, **kwargs):
+        pytest.fail("ambiguous arguments must be refused before repository collection")
+
+    monkeypatch.setattr(cli, "load_project_context", unexpected_collection)
+    assert cli.main(["--repo", "/unused", flag, value, f"{flag}={value}"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: invalid command-line arguments\n"
+
+
 def test_declared_commands_have_an_eight_kibibyte_limit(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     scripts = {f"cmd{index:03}": f"node {'x' * 20}" for index in range(180)}
