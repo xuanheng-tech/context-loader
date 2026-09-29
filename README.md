@@ -427,6 +427,11 @@ only verifies the public release, mirrors its exact formal tag object if missing
 the Gitea Release record. It builds no package and has no PyPI publishing credentials.
 No private endpoint or credential is needed on GitHub.
 
+For environments that permit direct public reads but share an exhausted proxy quota,
+set the Gitea Actions repository variable `RELEASE_PUBLIC_API_DIRECT=true`. The record
+step appends only public GitHub API/PyPI hosts to the existing proxy bypass lists. Without
+this explicit option, the workflow uses its inherited proxy settings.
+
 Release checks use Python 3.12, Git, and the runner's existing OpenSSL CLI. They compare downloaded
 PyPI file bytes, metadata and SHA-256, plus the publisher/tag/commit claims in PyPI's HTTPS-served
 provenance. This is an identity check, not an independent cryptographic Sigstore verifier.

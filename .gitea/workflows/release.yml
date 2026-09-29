@@ -84,8 +84,14 @@ jobs:
           RELEASE_TOKEN: ${{ github.token }}
           RELEASE_API_URL: ${{ github.api_url }}
           RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_PUBLIC_API_DIRECT: ${{ vars.RELEASE_PUBLIC_API_DIRECT || 'false' }}
         run: |
           set -euo pipefail
+          if [ "$RELEASE_PUBLIC_API_DIRECT" = true ]; then
+            public_release_no_proxy="${no_proxy-${NO_PROXY-}}"
+            export NO_PROXY="${public_release_no_proxy:+$public_release_no_proxy,}api.github.com,pypi.org,files.pythonhosted.org"
+            export no_proxy="$NO_PROXY"
+          fi
           if [ -z "$RELEASE_TAG" ]; then
             RELEASE_TAG="$(uv run --no-sync python -c 'import tomllib; print("v" + tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           fi
