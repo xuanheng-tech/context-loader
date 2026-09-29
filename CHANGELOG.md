@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+## 1.3.2 - 2026-09-29
+
 - Preserve private Just recipes across stacked attributes, recognize literal Make targets
   with double-colon rules and inline recipes, and reject duplicate value options before collection.
 - Refuse conflicting or duplicate annotated-tag headers before release identity checks.
