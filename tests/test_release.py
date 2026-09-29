@@ -22,6 +22,153 @@ SHA = "a" * 40
 RELEASE = {"tag": TAG, "version": "1.2.3", "commit": SHA, "notes": "- Release notes"}
 
 
+@pytest.mark.parametrize(
+    ("arguments", "operation"),
+    [
+        (("git", "fetch", "origin"), "git fetch"),
+        (("git", "ls-remote", "origin"), "git ls-remote"),
+        (("git", "push", "origin", "HEAD"), "git push"),
+        (("git", "-C", "/fixture-private-path", "rev-parse", "HEAD"), "git rev-parse"),
+    ],
+)
+def test_git_failure_identifies_operation_without_echoing_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    arguments: tuple[str, ...],
+    operation: str,
+) -> None:
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args, 128, "fixture-private-stdout", "fixture-private-stderr"
+        )
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("must not retry"))
+    with pytest.raises(r.ReleaseError) as failure:
+        r.command(*arguments)
+    assert str(failure.value) == f"{operation} failed (exit 128)"
+    assert calls == [arguments]
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("verb", ["fetch", "ls-remote"])
+def test_public_git_read_recovers_from_transient_transport(
+    monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    arguments = (
+        "git",
+        verb,
+        "--no-tags" if verb == "fetch" else "--tags",
+        f"https://github.com/{r.PUBLIC_REPOSITORY}.git",
+        f"refs/tags/{TAG}",
+    )
+    calls, waits = [], []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs["timeout"]))
+        return subprocess.CompletedProcess(
+            args,
+            128 if len(calls) == 1 else 0,
+            "resolved\n",
+            "fatal: the requested URL returned error: 502",
+        )
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+    monkeypatch.setattr(r.time, "sleep", waits.append)
+    assert r.command(*arguments) == "resolved"
+    assert calls == [(arguments, r.PUBLIC_GIT_TIMEOUT_SECONDS)] * 2
+    assert waits == [r.PUBLIC_GIT_DELAY_SECONDS]
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_public_git_transport_failure_has_a_finite_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    timeout: bool,
+) -> None:
+    arguments = ("git", "fetch", "--no-tags", f"https://github.com/{r.PUBLIC_REPOSITORY}.git", SHA)
+    calls, waits = [], []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if timeout:
+            raise subprocess.TimeoutExpired(
+                args, kwargs["timeout"], stderr="fixture-private-stderr"
+            )
+        return subprocess.CompletedProcess(args, 128, "", "fatal: connection reset by peer")
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+    monkeypatch.setattr(r.time, "sleep", waits.append)
+    with pytest.raises(r.ReleaseError) as failure:
+        r.command(*arguments)
+    assert len(calls) == r.PUBLIC_GIT_ATTEMPTS
+    assert waits == [r.PUBLIC_GIT_DELAY_SECONDS] * (r.PUBLIC_GIT_ATTEMPTS - 1)
+    assert f"after {r.PUBLIC_GIT_ATTEMPTS} attempts" in str(failure.value)
+    assert "fixture-private" not in str(failure.value)
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "authentication failed; the requested URL returned error: 502",
+        "permission denied",
+        "repository not found",
+        "couldn't find remote ref",
+        "not our ref",
+        "SSL certificate problem",
+        "local tag would be clobbered",
+    ],
+)
+def test_public_git_identity_and_permission_failures_are_not_retried(
+    monkeypatch: pytest.MonkeyPatch, diagnostic: str
+) -> None:
+    arguments = ("git", "fetch", "--no-tags", f"https://github.com/{r.PUBLIC_REPOSITORY}.git", SHA)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 128, "", diagnostic)
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("must not retry"))
+    with pytest.raises(r.ReleaseError):
+        r.command(*arguments)
+    assert calls == [arguments]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("git", "push", "--no-follow-tags", "origin", "HEAD:refs/heads/main"),
+        ("git", "push", "--no-tags", "https://github.com/{repo}.git", "HEAD"),
+        ("git", "fetch", "--no-tags", "origin", SHA),
+        ("git", "fetch", "--no-tags", "https://github.com/other/repository.git", SHA),
+        ("git", "ls-remote", "--refs", "origin", f"refs/tags/{TAG}"),
+    ],
+)
+def test_external_writes_and_nonpublic_reads_are_never_replayed(
+    monkeypatch: pytest.MonkeyPatch, arguments: tuple[str, ...]
+) -> None:
+    arguments = tuple(arg.replace("{repo}", r.PUBLIC_REPOSITORY) for arg in arguments)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(
+            args, 128, "", "fatal: the requested URL returned error: 502"
+        )
+
+    monkeypatch.setattr(r.subprocess, "run", run)
+    monkeypatch.setattr(r.time, "sleep", lambda _: pytest.fail("must not retry"))
+    with pytest.raises(r.ReleaseError):
+        r.command(*arguments)
+    assert calls == [arguments]
+
+
 @pytest.fixture
 def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"

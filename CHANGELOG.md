@@ -6,6 +6,10 @@ dates.
 
 ## Unreleased
 
+- Release control: identify the failing Git operation without echoing arguments or diagnostics.
+  Retry only transient reads of the public GitHub repository, at most three attempts with a
+  60-second timeout each; permissions, identity conflicts and pushes stop immediately.
+
 ## 1.3.2 - 2026-09-29
 
 - Preserve private Just recipes across stacked attributes, recognize literal Make targets

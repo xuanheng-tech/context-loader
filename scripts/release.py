@@ -78,6 +78,9 @@ PROPAGATION_DELAY_SECONDS = 15
 RATE_LIMIT_ATTEMPTS = 5
 RATE_LIMIT_DELAY_SECONDS = 60
 RATE_LIMIT_MAX_DELAY_SECONDS = 180
+PUBLIC_GIT_ATTEMPTS = 3
+PUBLIC_GIT_DELAY_SECONDS = 2
+PUBLIC_GIT_TIMEOUT_SECONDS = 60
 
 
 class ReleaseError(ValueError):
@@ -85,10 +88,80 @@ class ReleaseError(ValueError):
 
 
 def command(*args: str) -> str:
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise ReleaseError(f"{args[0]} failed (exit {result.returncode})")
-    return result.stdout.strip()
+    operation = args[0]
+    if operation == "git":
+        offset = 3 if args[1:2] == ("-C",) else 1
+        if args[offset : offset + 1] and args[offset] in {
+            "cat-file",
+            "diff",
+            "fetch",
+            "ls-remote",
+            "push",
+            "rev-parse",
+            "show",
+        }:
+            operation += f" {args[offset]}"
+    public_read = (
+        len(args) == 5
+        and args[:3] in (("git", "fetch", "--no-tags"), ("git", "ls-remote", "--tags"))
+        and args[3] == f"https://github.com/{PUBLIC_REPOSITORY}.git"
+    )
+    attempts = PUBLIC_GIT_ATTEMPTS if public_read else 1
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=PUBLIC_GIT_TIMEOUT_SECONDS if public_read else None,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt + 1 == attempts:
+                raise ReleaseError(f"{operation} timed out after {attempts} attempts") from None
+        else:
+            if not result.returncode:
+                return result.stdout.strip()
+            if attempt + 1 == attempts or not _transient_git_transport(result.stderr):
+                suffix = f" after {attempt + 1} attempts" if attempt else ""
+                raise ReleaseError(f"{operation} failed (exit {result.returncode}){suffix}")
+        time.sleep(PUBLIC_GIT_DELAY_SECONDS)
+    raise AssertionError("unreachable public Git retry state")
+
+
+def _transient_git_transport(stderr: str) -> bool:
+    """Classify transport errors internally; never echo credential-bearing Git diagnostics."""
+    message = stderr.lower()
+    if any(
+        marker in message
+        for marker in (
+            "authentication failed",
+            "permission denied",
+            "could not read username",
+            "repository not found",
+            "couldn't find remote ref",
+            "not our ref",
+            "certificate",
+        )
+    ):
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "could not resolve host:",
+            "failed to connect to",
+            "connection timed out",
+            "operation timed out",
+            "connection reset by peer",
+            "recv failure:",
+            "send failure:",
+            "http/2 stream",
+            "http/2 framing layer",
+            "the requested url returned error: 502",
+            "the requested url returned error: 503",
+            "the requested url returned error: 504",
+        )
+    )
 
 
 def check_readme_version(readme: str, version: str, package: str = PACKAGE) -> None:
