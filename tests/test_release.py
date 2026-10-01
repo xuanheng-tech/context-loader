@@ -174,8 +174,6 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.chdir(repo)
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     subprocess.run(["git", "init", "-q", "-b", "main"], check=True)
     (repo / "context_loader").mkdir()
     (repo / "pyproject.toml").write_text(f'[project]\nname = "{r.PACKAGE}"\nversion = "1.2.3"\n')

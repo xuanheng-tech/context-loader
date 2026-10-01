@@ -1,8 +1,8 @@
 """Safe, bounded filesystem primitives shared by every context collection scan.
 
 Everything here is descriptor-relative, never follows a symlink across a boundary it
-does not report, and caps its own work: this module reads directory entries and file
-bytes, and it reports what it observed as typed availability reasons rather than as
+does not report, and bounds retained entries and file reads. It reports observations
+as typed availability reasons rather than as
 prose, so callers cannot lose the difference between absence and a bounded claim.
 """
 
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from heapq import nsmallest
 from pathlib import Path
 
-from .model import FILE_SCAN_LIMIT_BYTES, Availability
+from .model import DIRECTORY_NAME_SCAN_LIMIT_ENTRIES, FILE_SCAN_LIMIT_BYTES, Availability
 
 DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
 REGULAR_FILE_OPEN_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
@@ -38,31 +38,37 @@ class DirectoryEntryFacts:
 class DirectoryListing:
     """A sorted, capped enumeration of one directory.
 
-    ``capped`` is the honest claim that the directory holds more entries than were
-    examined, so a caller can never present this listing as complete.
+    ``capped`` means more names were scanned than were retained and classified,
+    so a caller can never present this listing as complete.
     """
 
     entries: tuple[DirectoryEntryFacts, ...]
     capped: bool
 
 
+class DirectoryScanLimitError(OSError):
+    """The name scan exceeded its hard cap; no alphabetical prefix is trustworthy."""
+
+
 def display_text(value: str) -> str:
     r"""Render one filesystem or Git string as printable, encodable ASCII-safe text.
 
-    Backticks, lone surrogates produced by ``surrogateescape`` decoding, and every
-    other non-printable codepoint become ``\xNN``/``\uNNNN``/``\UNNNNNNNN`` escapes so
-    the character can cross the JSON and Markdown serialization boundaries intact.
+    Escape backslashes as well as backticks and non-printable codepoints so names
+    remain distinguishable. ``\x80`` through ``\xff`` represent undecodable bytes;
+    Unicode controls above ASCII use ``\uNNNN`` instead of sharing those escapes.
     """
     rendered: list[str] = []
     for character in value:
         codepoint = ord(character)
-        if character == "`":
+        if character == "\\":
+            rendered.append(r"\\")
+        elif character == "`":
             rendered.append(r"\x60")
         elif 0xDC80 <= codepoint <= 0xDCFF:
             rendered.append(f"\\x{codepoint - 0xDC00:02x}")
         elif character.isprintable():
             rendered.append(character)
-        elif codepoint <= 0xFF:
+        elif codepoint <= 0x7F:
             rendered.append(f"\\x{codepoint:02x}")
         elif codepoint <= 0xFFFF:
             rendered.append(f"\\u{codepoint:04x}")
@@ -93,6 +99,8 @@ def open_child_directory(parent_descriptor: int, name: str) -> int:
 def _counted(entries: Iterator[os.DirEntry[str]], counter: list[int]) -> Iterator[os.DirEntry[str]]:
     for entry in entries:
         counter[0] += 1
+        if counter[0] > DIRECTORY_NAME_SCAN_LIMIT_ENTRIES:
+            raise DirectoryScanLimitError("directory name scan exceeded the safety limit")
         yield entry
 
 
@@ -117,7 +125,11 @@ def enumerate_directory(directory_descriptor: int, limit: int) -> DirectoryListi
     rather than whatever the operating system happened to yield first, so a capped
     listing is reproducible. Memory stays bounded by ``limit`` because entries are
     selected while the scan iterator is consumed, and only the retained entries are
-    classified. ``OSError`` propagates when the directory itself cannot be read, so
+    classified. All names must be scanned to establish that alphabetical prefix;
+    ``limit`` bounds retention/classification, not iteration or elapsed time. The
+    independent name-scan cap raises ``DirectoryScanLimitError`` and discards the
+    entire prefix rather than reporting an OS-order-dependent partial result.
+    ``OSError`` propagates when the directory itself cannot be read, so
     each caller keeps its own meaning for an unreadable directory.
     """
     if limit < 1:

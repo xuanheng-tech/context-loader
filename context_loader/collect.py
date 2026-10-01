@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from .filesystem import (
+    DirectoryScanLimitError,
     enumerate_directory,
     open_bounded_regular_file,
     open_child_directory,
@@ -185,6 +186,7 @@ def _ordered_reasons(reasons: set[str] | frozenset[str]) -> tuple[str, ...]:
 
 
 _AUDIT_EMPTY_LIST_LINE = "- None."
+_AUDIT_NO_INDEX_LINE = "- Omitted content has no available heading index; read the source path."
 
 
 def _audit_heading(heading: str) -> str:
@@ -196,6 +198,11 @@ def _audit_heading(heading: str) -> str:
 
 def _audit_index_line(entry: AgentsSectionAuditEntry) -> str:
     return f"- H{entry.heading_level} {_audit_heading(entry.heading)}"
+
+
+def _audit_selected_line(entry: AgentsSectionAuditEntry) -> str:
+    label = "Document head" if entry.heading_level == 0 else _audit_heading(entry.heading)
+    return f"- {label} — `{', '.join(entry.reasons)}`"
 
 
 def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
@@ -212,9 +219,7 @@ def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
     ]
     if audit.selected_sections:
         for entry in audit.selected_sections:
-            label = "Document head" if entry.heading_level == 0 else _audit_heading(entry.heading)
-            reasons = ", ".join(entry.reasons)
-            lines.append(f"- {label} — `{reasons}`")
+            lines.append(_audit_selected_line(entry))
     else:
         lines.append(_AUDIT_EMPTY_LIST_LINE)
     lines.extend(
@@ -229,7 +234,7 @@ def render_agents_selection_audit(audit: AgentsSelectionAudit) -> str:
     else:
         lines.append(_AUDIT_EMPTY_LIST_LINE)
         if audit.truncated and not audit.index_truncated:
-            lines.append("- Omitted content has no available heading index; read the source path.")
+            lines.append(_AUDIT_NO_INDEX_LINE)
     if audit.index_truncated:
         lines.append("- Additional headings omitted from this index by the AGENTS budget.")
     if audit.parse_fallback:
@@ -329,7 +334,11 @@ def _small_head_end(content: str, sections: tuple[MarkdownSection, ...]) -> int:
 def _section_relevance(
     section: MarkdownSection, signals: _SelectionSignals
 ) -> tuple[int, frozenset[str]]:
-    heading_tokens = _matching_tokens(section.heading, _MATCH_TOKEN_STOPWORDS)
+    heading_tokens = frozenset(
+        token
+        for token in section.normalized_heading.split()
+        if len(token) >= 3 and token not in _MATCH_TOKEN_STOPWORDS
+    )
     section_tokens = _matching_tokens(section.text, _MATCH_TOKEN_STOPWORDS)
     body_tokens = section_tokens - heading_tokens
     score = 0
@@ -343,9 +352,9 @@ def _section_relevance(
 
     path_heading = signals.path_tokens & heading_tokens
     path_body = signals.path_tokens & body_tokens
-    normalized_section = _normalized_text(section.text)
     exact_path = bool(
-        signals.normalized_path and _normalized_text(signals.normalized_path) in normalized_section
+        signals.normalized_path
+        and _normalized_text(signals.normalized_path) in _normalized_text(section.text)
     )
     if exact_path or path_heading or path_body:
         reasons.add("path_match")
@@ -522,50 +531,172 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         return _bounded_head_fallback(source, parse_fallback=True)
 
     head_end = _small_head_end(source.content, sections)
-    selected_indices: frozenset[int] = frozenset()
-    reasons: dict[int, set[str]] = {}
+    selected_indices = {index for index, section in enumerate(sections) if section.end <= head_end}
+    reasons: dict[int, set[str]] = {index: {"head"} for index in selected_indices}
     ranked: list[tuple[int, int, frozenset[str]]] = []
     for index, section in enumerate(sections):
-        score, section_reasons = _section_relevance(section, signals)
-        if score >= 4:
-            ranked.append((score, index, section_reasons))
+        if signals.focus_tokens or signals.path_tokens or signals.normalized_path:
+            score, section_reasons = _section_relevance(section, signals)
+            if score >= 4:
+                ranked.append((score, index, section_reasons))
     ranked.sort(key=lambda item: (-item[0], sections[item[1]].start))
+
+    # Sections are disjoint. Candidate admission therefore needs only the bytes,
+    # characters and audit lines changed by that section and its (at most six)
+    # parents, rather than rebuilding every section/index for every candidate.
+    extra_bytes = [
+        len(source.content[max(head_end, section.start) : section.end].encode("utf-8"))
+        if section.end > head_end
+        else 0
+        for section in sections
+    ]
+    index_sizes = [
+        len(
+            _audit_index_line(AgentsSectionAuditEntry(s.heading, s.heading_level, ())).encode(
+                "utf-8"
+            )
+        )
+        + 1
+        for s in sections
+    ]
+    selected_sizes = {
+        index: len(
+            _audit_selected_line(
+                AgentsSectionAuditEntry(
+                    sections[index].heading, sections[index].heading_level, ("head",)
+                )
+            ).encode("utf-8")
+        )
+        + 1
+        for index in selected_indices
+    }
+    selected_lines = sum(selected_sizes.values())
+    document_head_end = sections[0].start if sections else len(source.content)
+    if document_head_end and head_end:
+        selected_lines += (
+            len(
+                _audit_selected_line(AgentsSectionAuditEntry("Document head", 0, ("head",))).encode(
+                    "utf-8"
+                )
+            )
+            + 1
+        )
+    content_bytes = len(source.content[:head_end].encode("utf-8"))
+    chars_selected = head_end
+    index_count = len(sections) - len(selected_indices)
+    index_lines = sum(
+        size for index, size in enumerate(index_sizes) if index not in selected_indices
+    )
+    first_index = len(selected_indices)
+    placeholder_bytes = len(_AUDIT_EMPTY_LIST_LINE.encode("utf-8")) + 1
+    no_index_bytes = len(_AUDIT_NO_INDEX_LINE.encode("utf-8")) + 1
+    empty_sizes = {
+        (truncated, index_truncated): len(
+            render_agents_selection_audit(
+                AgentsSelectionAudit(
+                    source="AGENTS.md",
+                    selected_sections=(),
+                    indexed_only_sections=(),
+                    chars_selected=0,
+                    chars_omitted=0,
+                    truncated=truncated,
+                    source_scan_truncated=source.truncated,
+                    index_truncated=index_truncated,
+                )
+            ).encode("utf-8")
+        )
+        for truncated in (False, True)
+        for index_truncated in (False, True)
+    }
+
+    def minimum_cost(
+        body_bytes: int,
+        chars: int,
+        selected_line_bytes: int,
+        remaining_count: int,
+        remaining_lines: int,
+        first_remaining: int,
+    ) -> int:
+        omitted = max(0, source.source_characters - chars)
+        truncated = omitted > 0 or source.truncated
+        common = body_bytes + len(str(chars)) + len(str(omitted)) - 2
+        if selected_line_bytes:
+            common += selected_line_bytes - placeholder_bytes
+        full = common + empty_sizes[truncated, False]
+        if remaining_count:
+            full += remaining_lines - placeholder_bytes
+            if truncated:
+                full -= no_index_bytes
+        fitted = common + empty_sizes[truncated, True]
+        if remaining_count > 1:
+            # A very short first index line can cost less than the empty placeholder.
+            fitted += min(0, index_sizes[first_remaining] - placeholder_bytes)
+        return min(full, fitted)
 
     budget_fallback: set[int] = set()
     for _score, index, section_reasons in ranked:
-        trial_indices = set(selected_indices)
-        trial_reasons = {key: set(value) for key, value in reasons.items()}
-        trial_indices.add(index)
-        trial_reasons.setdefault(index, set()).update(section_reasons)
+        trial_reasons = {index: reasons.get(index, set()) | set(section_reasons)}
         parent = sections[index].parent_index
         while parent is not None:
-            trial_indices.add(parent)
-            trial_reasons.setdefault(parent, set()).add("parent_context")
+            trial_reasons[parent] = reasons.get(parent, set()) | {"parent_context"}
             parent = sections[parent].parent_index
-        trial_content, trial_audit = _selection_state(
-            source.content,
-            sections,
-            head_end,
-            frozenset(trial_indices),
-            trial_reasons,
-            frozenset(budget_fallback),
-            parse_fallback=False,
-            source_scan_truncated=source.truncated,
-            source_characters=source.source_characters,
+        new_indices = trial_reasons.keys() - selected_indices
+        trial_bytes = content_bytes + sum(extra_bytes[item] for item in new_indices)
+        trial_chars = chars_selected + sum(
+            sections[item].end - max(head_end, sections[item].start) for item in new_indices
         )
-        try:
-            _fit_agents_index(trial_content, trial_audit)
-        except RuntimeError:
+        trial_sizes = {
+            item: len(
+                _audit_selected_line(
+                    AgentsSectionAuditEntry(
+                        sections[item].heading,
+                        sections[item].heading_level,
+                        _ordered_reasons(item_reasons),
+                    )
+                ).encode("utf-8")
+            )
+            + 1
+            for item, item_reasons in trial_reasons.items()
+        }
+        trial_selected_lines = selected_lines + sum(
+            size - selected_sizes.get(item, 0) for item, size in trial_sizes.items()
+        )
+        trial_index_count = index_count - len(new_indices)
+        trial_index_lines = index_lines - sum(index_sizes[item] for item in new_indices)
+        trial_first = first_index
+        while trial_first < len(sections) and (
+            trial_first in selected_indices or trial_first in new_indices
+        ):
+            trial_first += 1
+        if (
+            minimum_cost(
+                trial_bytes,
+                trial_chars,
+                trial_selected_lines,
+                trial_index_count,
+                trial_index_lines,
+                trial_first,
+            )
+            > AGENTS_LIMIT_BYTES
+        ):
             budget_fallback.add(index)
         else:
-            selected_indices = frozenset(trial_indices)
-            reasons = trial_reasons
+            selected_indices.update(new_indices)
+            reasons.update(trial_reasons)
+            selected_sizes.update(trial_sizes)
+            content_bytes, chars_selected = trial_bytes, trial_chars
+            selected_lines = trial_selected_lines
+            index_count, index_lines, first_index = (
+                trial_index_count,
+                trial_index_lines,
+                trial_first,
+            )
 
     content, audit = _selection_state(
         source.content,
         sections,
         head_end,
-        selected_indices,
+        frozenset(selected_indices),
         reasons,
         frozenset(budget_fallback),
         parse_fallback=False,
@@ -837,6 +968,9 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
                 continue
             try:
                 walk(child_descriptor, entry_path, depth + 1)
+            except DirectoryScanLimitError:
+                collected[index] = TreeEntry(entry_path, "scan_limit_directory")
+                truncated = True
             except OSError:
                 mark_unreadable(index, entry_path)
             finally:
@@ -849,6 +983,9 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
     try:
         try:
             walk(root_descriptor, "", 0)
+        except DirectoryScanLimitError:
+            collected.append(TreeEntry("", "scan_limit_directory"))
+            truncated = True
         except OSError:
             if not collected:
                 collected.append(TreeEntry("", "unreadable_directory"))

@@ -243,28 +243,30 @@ def test_agents_budget_constant_and_legacy_collection_call_remain_compatible(
     assert project.instructions.content == "# Demo\nlegacy call\n"
 
 
-def test_index_fitting_renders_the_audit_a_bounded_number_of_times(
+def test_selection_does_not_rebuild_the_entire_index_for_each_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     headings = 800
     content = _heading_dense_agents(headings)
     assert len(content.encode("utf-8")) <= AGENTS_SCAN_LIMIT_BYTES
     renders = 0
+    entries_processed = 0
     original = collect.render_agents_selection_audit
 
     def counting(audit):
-        nonlocal renders
+        nonlocal renders, entries_processed
         renders += 1
+        entries_processed += len(audit.selected_sections) + len(audit.indexed_only_sections)
         return original(audit)
 
     monkeypatch.setattr(collect, "render_agents_selection_audit", counting)
 
     source = _collect(tmp_path, content, focus="authentication session policy module")
 
-    # Dropping one index entry at a time and re-rendering the whole audit grew with
-    # the square of the heading count; fitting now renders a fixed number of times
-    # per candidate section.
-    assert renders <= 4 * headings
+    # Count actual index work as well as calls: a bounded call count per candidate
+    # still allowed quadratic work when each call walked all headings.
+    assert renders <= 7
+    assert entries_processed <= 2 * (headings + 1)
     assert source.selection is not None
     assert source.selection.index_truncated is True
     assert _aggregate(source) <= AGENTS_LIMIT_BYTES

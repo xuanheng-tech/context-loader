@@ -15,6 +15,7 @@ GIT_EXECUTABLE = "/usr/bin/git"
 GIT_TIMEOUT_SECONDS = 30
 MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_RECENT_COMMITS = 8
+MAX_STATUS_REPOSITORIES = 128
 
 _OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _GIT_PREFIX = (
@@ -37,10 +38,13 @@ _GIT_PREFIX = (
     "i18n.logOutputEncoding=UTF-8",
     "-c",
     "log.showSignature=false",
+    "-c",
+    "protocol.allow=never",
 )
 _GIT_ENVIRONMENT = MappingProxyType(
     {
         "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_ALLOW_PROTOCOL": "",
         "GIT_CONFIG_COUNT": "0",
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -314,7 +318,65 @@ def _upstream_state(repo: Path, branch_name: str | None) -> tuple[str, str]:
     return upstream, f"{counts[0].decode('ascii')} / {counts[1].decode('ascii')}"
 
 
+def _ensure_safe_status(repo: Path) -> None:
+    """Reject executable conversions before status can refresh any index entry.
+
+    Attributes can select clean/process drivers even during a read-only status.
+    Ignoring those drivers would change Git's cleanliness semantics, so fail closed
+    instead. Status also inspects initialized submodules; check their own config
+    without invoking `submodule foreach` or any repository-supplied command.
+    """
+    pending = [repo]
+    seen: set[Path] = set()
+    while pending:
+        current = pending.pop()
+        identity = current.resolve()
+        if identity in seen:
+            raise ContextLoaderError("unable to safely inspect cyclic submodule state")
+        seen.add(identity)
+        if len(seen) > MAX_STATUS_REPOSITORIES:
+            raise ContextLoaderError("repository submodule inspection exceeded the safety limit")
+        filters = _run_git(
+            current,
+            ("config", "--null", "--get-regexp", r"^filter\..*\.(clean|process)$"),
+            check=False,
+        )
+        if filters.returncode not in (0, 1):
+            raise ContextLoaderError("unable to safely inspect repository Git filters")
+        filter_commands: dict[bytes, bytes] = {}
+        for record in filters.stdout.split(b"\0"):
+            if not record:
+                continue
+            key, separator, value = record.partition(b"\n")
+            if not key or not separator:
+                raise ContextLoaderError("unable to safely inspect repository Git filters")
+            filter_commands[key] = value
+        if any(filter_commands.values()):
+            raise ContextLoaderError(
+                "repository or submodule config enables Git clean/process filters; "
+                "unable to safely inspect working-tree state"
+            )
+        index = _run_git(current, ("ls-files", "--stage", "-z"))
+        children: set[Path] = set()
+        for record in index.stdout.split(b"\0"):
+            metadata, separator, raw_path = record.partition(b"\t")
+            if metadata.split(b" ", 1)[0] != b"160000":
+                continue
+            if not separator or not raw_path:
+                raise ContextLoaderError("unable to parse repository submodule state")
+            path = Path(_decode_path(raw_path))
+            if path.is_absolute() or ".." in path.parts:
+                raise ContextLoaderError("unable to safely inspect repository submodule state")
+            child = current / path
+            if (child / ".git").exists():
+                children.add(child)
+        pending.extend(sorted(children))
+        if len(seen) + len(pending) > MAX_STATUS_REPOSITORIES:
+            raise ContextLoaderError("repository submodule inspection exceeded the safety limit")
+
+
 def _working_tree_changes(repo: Path) -> tuple[WorkingTreeChange, ...]:
+    _ensure_safe_status(repo)
     result = _run_git(
         repo,
         (

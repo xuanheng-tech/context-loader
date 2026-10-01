@@ -39,12 +39,9 @@ jobs:
           just-version: "1.21.0"
           github-token: ""
       - name: Shared quality gate
-        # Contract mirrors git-finalizer 8a0326e: the DAC-sensitive test suite
-        # must not run under root, whose CAP_DAC_OVERRIDE defeats chmod 000.
-        run: |
-          set -euo pipefail
-          chown -R ubuntu:ubuntu "$GITHUB_WORKSPACE"
-          sudo -u ubuntu -H env "PATH=$PATH" just check
+        env:
+          CONTEXT_LOADER_CI_USER: ${{ vars.CONTEXT_LOADER_CI_USER || 'ubuntu' }}
+        run: just ci-check
       - name: Audit current refs, Releases and workflow runs
         env:
           RELEASE_TOKEN: ${{ github.token }}

@@ -92,6 +92,65 @@ def _incomplete_subjects(document: dict[str, object]) -> list[str]:
     ]
 
 
+@pytest.mark.parametrize("at_root", [False, True])
+def test_name_scan_limit_discards_partial_listing_and_reports_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_root: bool
+) -> None:
+    monkeypatch.setattr("context_loader.filesystem.DIRECTORY_NAME_SCAN_LIMIT_ENTRIES", 12)
+    repo = _repository(tmp_path)
+    directory = repo if at_root else repo / "oversize"
+    directory.mkdir(exist_ok=True)
+    for index in range(20):
+        (directory / f"name-{index:03d}").write_text("x\n", encoding="utf-8")
+    (directory / "AGENTS.md").write_text("x\n", encoding="utf-8")
+
+    result, document = _load(repo)
+    lines, section = _tree(result)
+
+    assert "Skipped: directory name scan limit reached." in section
+    assert not any("name-" in line for line in lines)
+    assert {
+        "code": "directory_scan_limit_exceeded",
+        "subject_kind": "tree_entry",
+        "subject": "." if at_root else "oversize",
+    } in document["statuses"]
+    assert document["nested_context"]["files"] == []
+    assert document["nested_context"]["scan_truncated"] is True
+    assert _incomplete_subjects(document) == []
+
+
+def test_name_scan_stops_at_the_first_entry_beyond_its_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import contextlib
+    from types import SimpleNamespace
+
+    from context_loader.filesystem import DirectoryScanLimitError, enumerate_directory
+
+    monkeypatch.setattr("context_loader.filesystem.DIRECTORY_NAME_SCAN_LIMIT_ENTRIES", 12)
+    seen = 0
+
+    def names():
+        nonlocal seen
+        for index in range(1000):
+            seen += 1
+            yield SimpleNamespace(name=f"name-{index:03d}")
+
+    @contextlib.contextmanager
+    def listing(_descriptor):
+        yield names()
+
+    monkeypatch.setattr("context_loader.filesystem.os.scandir", listing)
+    monkeypatch.setattr(
+        "context_loader.filesystem._entry_facts",
+        lambda _: pytest.fail("partial prefix must not be classified"),
+    )
+
+    with pytest.raises(DirectoryScanLimitError):
+        enumerate_directory(123, 4)
+    assert seen == 13
+
+
 def test_enumeration_cap_claims_an_incomplete_root_listing(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     for index in range(TREE_CAP + 5):
@@ -107,8 +166,8 @@ def test_enumeration_cap_claims_an_incomplete_root_listing(tmp_path: Path) -> No
     ]
     assert notes == [
         f"Listing incomplete: 1 directory held more entries than the {TREE_CAP}-entry "
-        f"per-directory enumeration limit, so only an alphabetically first prefix of each "
-        f"was examined and the rest were neither examined nor listed; this section also "
+        f"per-directory retention limit. All names were scanned to select an "
+        f"alphabetically first prefix; only that prefix was retained and classified. This section also "
         f"keeps only as many entries as its own entry and byte budgets allow. "
         f"Named here: `.`."
     ]
@@ -365,7 +424,8 @@ def test_note_stays_true_when_the_item_budget_hides_most_of_a_capped_prefix(
 
     assert len(notes) == 1
     assert len(lines) <= 7, "the fixture must really be item-budget limited"
-    assert "was examined and the rest were neither examined nor listed" in notes[0]
+    assert "All names were scanned" in notes[0]
+    assert "only that prefix was retained and classified" in notes[0]
     for false_claim in (f"{cap} names to this listing", f"first {cap} of each were listed"):
         assert false_claim not in notes[0]
 
@@ -457,7 +517,7 @@ def test_capped_directories_beyond_the_example_limit_report_an_aggregate(
     assert len(aggregate) == 1
     assert aggregate[0]["code"] == "directory_listing_incomplete"
     assert aggregate[0]["subject"] == (
-        f"12 directories exceeded the {cap}-entry per-directory enumeration limit; "
+        f"12 directories exceeded the {cap}-entry per-directory retention limit; "
         "4 further directories not named individually"
     )
     assert len(subjects) == 9
@@ -497,12 +557,7 @@ def test_display_escaping_cannot_merge_two_capped_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two names that escape to the same text are still two facts, and still counted.
-
-    `display_text` is not injective: a directory named "`" and one named "\x60" both render
-    as the four characters \x60. Deduplicating or counting on the displayed text would
-    silently drop one capped directory and understate the aggregate.
-    """
+    """Escaped characters and literal escape sequences remain distinct facts and displays."""
     cap = 12
     monkeypatch.setattr("context_loader.collect.DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY", cap)
     repo = _repository(tmp_path)
@@ -520,16 +575,16 @@ def test_display_escaping_cannot_merge_two_capped_directories(
     # Nine capped directories, so eight are named individually and one is not. Had the
     # collision collapsed, only seven would be named and the arithmetic would still claim eight.
     assert len(per_directory) == 8, "two distinct directories must stay two statuses"
-    assert sum(1 for status in per_directory if status["subject"] == r"\x60") == 2
+    assert {r"\x60", r"\\x60"} <= {status["subject"] for status in per_directory}
     assert len(aggregate) == 1
     assert aggregate[0]["subject"] == (
-        f"9 directories exceeded the {cap}-entry per-directory enumeration limit; "
+        f"9 directories exceeded the {cap}-entry per-directory retention limit; "
         "1 further directory not named individually"
     )
     notes = [line for line in result.context.splitlines() if line.startswith("Listing incomplete:")]
     assert len(notes) == 1
     assert "9 directories held more entries" in notes[0]
-    assert notes[0].count(r"`\x60`") == 2, "both colliding names appear in the note"
+    assert r"`\x60`" in notes[0] and r"`\\x60`" in notes[0]
 
 
 def test_enumeration_cap_reports_nothing_at_the_limit_and_everything_above_it(

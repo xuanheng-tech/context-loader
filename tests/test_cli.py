@@ -735,7 +735,7 @@ def test_entry_file_content_has_per_file_and_aggregate_limits(tmp_path: Path) ->
 
     assert result.returncode == 0
     entries = _section(result.stdout.decode("utf-8"), "Project Entry Files", "Recent Commits")
-    assert entries.count(payload) == 3
+    assert entries.count(payload) == 2
     for name in ("Makefile", "Cargo.toml", "go.mod"):
         subsection = entries.split(f"### `{name}`\n\n", 1)[1]
         assert subsection.startswith(
@@ -993,6 +993,86 @@ def test_configured_fsmonitor_is_not_executed(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("driver", ["clean", "process"])
+@pytest.mark.parametrize("submodule_depth", [0, 1, 2])
+def test_git_conversion_filters_fail_closed_before_status(
+    tmp_path: Path, driver: str, submodule_depth: int
+) -> None:
+    repo = _repository(tmp_path)
+    inspected = [repo]
+    current = repo
+    for _ in range(submodule_depth):
+        child = _repository(current / "module")
+        head = _git(child, "rev-parse", "HEAD").decode().strip()
+        _git(current, "update-index", "--add", "--cacheinfo", f"160000,{head},module/repo")
+        inspected.append(child)
+        current = child
+    marker = tmp_path / "filter-ran"
+    driver_script = tmp_path / "filter"
+    driver_script.write_text(f"#!/bin/sh\ntouch '{marker}'\ncat\n", encoding="utf-8")
+    driver_script.chmod(0o700)
+    (current / ".gitattributes").write_text("tracked.txt filter=audit\n", encoding="utf-8")
+    _git(current, "config", f"filter.audit.{driver}", os.fspath(driver_script))
+    (current / "tracked.txt").write_text("force content comparison\n", encoding="utf-8")
+    before = tuple(_git_file_metadata(path) for path in inspected)
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert b"Git clean/process filters" in result.stderr
+    assert os.fsencode(driver_script) not in result.stderr
+    assert not marker.exists()
+    assert tuple(_git_file_metadata(path) for path in inspected) == before
+
+
+def test_filter_guard_reads_includes_and_worktree_config(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    included = repo / ".git" / "driver-config"
+    included.write_text('[filter "audit"]\n    clean = cat\n', encoding="utf-8")
+    _git(repo, "config", "include.path", os.fspath(included))
+    assert _run(repo).returncode == 1
+
+    # The effective last value wins; an overridden empty command cannot execute.
+    _git(repo, "config", "filter.audit.clean", "")
+    _git(repo, "config", "filter.audit.process", "")
+    _git(repo, "config", "filter.audit.smudge", "cat")
+    assert _run(repo).returncode == 0
+
+    _git(repo, "config", "extensions.worktreeConfig", "true")
+    _git(repo, "config", "--worktree", "filter.audit.process", "cat")
+    result = _run(repo)
+    assert result.returncode == 1
+    assert result.stdout == b""
+
+
+def test_protocol_deny_overrides_repository_transport_configuration(tmp_path: Path) -> None:
+    from context_loader.git import _run_git
+
+    repo = _repository(tmp_path)
+    marker = tmp_path / "transport-ran"
+    transport = tmp_path / "transport"
+    transport.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    transport.chmod(0o700)
+    _git(repo, "config", "protocol.ext.allow", "always")
+    _git(repo, "config", "remote.fixture.url", f"ext::{transport}")
+    before = _git_file_metadata(repo)
+
+    result = _run_git(repo, ("ls-remote", "fixture"), check=False)
+
+    assert result.returncode != 0
+    assert not marker.exists()
+    assert _git_file_metadata(repo) == before
+
+
+def test_uninitialized_submodule_does_not_block_safe_status(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD").decode().strip()
+    _git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},uninitialized")
+
+    assert _run(repo).returncode == 0
 
 
 def test_heading_dense_agents_still_renders_every_section(tmp_path: Path) -> None:

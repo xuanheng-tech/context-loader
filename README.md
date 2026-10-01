@@ -186,7 +186,14 @@ context, in assembly order, after the existing newline normalization and truncat
 distinguishes `repository` from `global`; version 1.0.0's fixed root-file selection currently emits
 only `repository` sources and does not add any global-file discovery.
 
-`statuses` lists machine-readable collection and render conditions that previously appeared only inside `context` Markdown — plus the nested-context truncation flags, which exist only in machine form: skipped or absent sources, truncated sources, unreadable directory-tree entries, directory-tree entries whose directory holds more entries than one enumeration examines, sections omitted under the global output budget, truncated working-tree, declared-command or directory-tree listings, and truncated nested-`AGENTS.md` presence reports. A skipped or absent source reports the code of the condition the collector observed (`not_present`, `skipped_symlink`, `skipped_not_regular`, `skipped_encoding`, `skipped_unreadable`); the sentence in `context` is rendered from that same condition, so wording and code cannot drift apart. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two `nested_agents_*` codes mirror the `nested_context` truncation booleans for consumers that branch only on `statuses`; the full `nested_context` object remains a first-class field, never folded into `statuses`. Callers can ignore `statuses` safely.
+`statuses` lists skipped or absent sources, truncated sources, unreadable tree entries,
+directories whose listing exceeds its retention cap, globally omitted sections, and truncated
+working-tree, command, tree or nested-`AGENTS.md` listings. A skipped or absent source reports
+the observed condition (`not_present`, `skipped_symlink`, `skipped_not_regular`,
+`skipped_encoding`, `skipped_unreadable`); its sentence in `context` comes from that same
+condition. Each entry has stable `code`, `subject_kind`, and `subject` fields. The two
+`nested_agents_*` codes mirror the `nested_context` truncation booleans; the complete object
+remains a separate field. Callers can ignore `statuses` safely.
 
 The optional `selection` object is present only on a rendered `AGENTS.md` source. Its section entries
 contain heading, heading level, and fixed selection reasons; it never contains the original focus or
@@ -206,7 +213,7 @@ separator, with the array's brackets charged to the first entry — so the emitt
 more than the budget it declares. Because quoting is counted, an array already near the cap can
 report one path fewer than an older release did, and then says so through `list_truncated`.
 `scan_truncated` means the depth (4) or directory-count (2,000) budget was reached, a directory
-held more entries than one enumeration examines (1,024), or a directory or entry could not be
+held more entries than one listing retains (1,024), or a directory or entry could not be
 read, so absence of a path is not proof of absence of the file. Nested paths
 are sanitized with the same escaping the Markdown uses for repository-derived text, so a nested name
 the filesystem could not decode never breaks the document;
@@ -214,6 +221,16 @@ see “Limits” for the root paths that are emitted verbatim. The corresponding
 `nested_agents_list_truncated` and `nested_agents_scan_truncated` status entries mirror both flags.
 Presence is not instruction: whether a nested file applies, and its text, remain the caller's
 judgment; Markdown output is unchanged.
+
+Escaped names remain reversible and distinct: a literal backslash becomes `\\`, a backtick
+becomes `\x60`, ASCII controls and undecodable filesystem bytes become `\xNN`, and other
+non-printable Unicode characters become `\uNNNN` or `\UNNNNNNNN`. Printable Unicode stays
+unchanged. After JSON decoding, recover POSIX path bytes by reading escapes from left to right:
+`\\` yields one backslash byte, `\xNN` yields that byte, and Unicode escapes and ordinary
+characters yield their UTF-8 bytes. Thus a backtick, a literal `\x60`, an undecodable byte
+`0x80`, and Unicode `U+0080` all have different representations. This applies to nested paths
+and displayed tree/change/status names; the verbatim root/source paths retain their existing
+semantics.
 
 ### Compact model consumption (`--format json-compact`)
 
@@ -316,10 +333,11 @@ bullet is a per-component, read or capture bound, as each one states:
   16 KiB, including a 4-KiB maximum small head
 - `README.md`: 16 KiB
 - Each entry file: 8 KiB
-- All entry-file bodies: 24 KiB
+- All entry-file bodies: 24 KiB, including truncation markers. Room is reserved for markers
+  on later text sources, so exhausting the budget never hides that their bodies were cut.
 - Declared commands: 8 KiB
 - Directory tree: 12 KiB of listing body, 300 entries, and depth 2. Each directory is
-  enumerated up to 512 entries, keeping the alphabetically first names so the listing never
+  retains and classifies up to 512 entries, keeping the alphabetically first names so the listing never
   depends on operating system order. A directory that holds more is reported by a single
   `Listing incomplete:` line stating the total, the limit and up to three names, and by at most
   eight `directory_listing_incomplete` status entries naming individual directories plus one
@@ -330,8 +348,10 @@ bullet is a per-component, read or capture bound, as each one states:
   alphabetical prefix and the entry budget kept it, so capped siblings displaced by the budget are
   disclosed as their parent's truncation rather than as separate numbers.
   Three limits act in sequence and a name survives only if all three leave room. The 512-entry
-  enumeration limit decides which names a directory offers at all; above it only an alphabetical
-  prefix is ever seen. The 300-entry item budget is then shared between a directory's
+  retention limit decides which names a directory offers at all; above it only an alphabetical
+  prefix is classified. All names must still be scanned to find that prefix, subject to the
+  separate hard name-scan bound below; the retention cap bounds memory and classification work.
+  The 300-entry item budget is then shared between a directory's
   subdirectories and its non-directories: each may take up to half of what remains before the other
   claims the surplus, which stops alphabetically-earlier directories from evicting every file, but
   it is a share rather than a floor -- with a single slot left the non-directories take it. The 12
@@ -350,8 +370,14 @@ bullet is a per-component, read or capture bound, as each one states:
   fence say so. The heading and the code-fence lines are not metered, so the whole Markdown
   section can exceed 12 KiB by that fixed few dozen bytes.
 - Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths, a
-  4 KiB budget metered on the emitted array, and at most 1,024 entries examined per directory;
-  file contents are never read
+  4 KiB budget metered on the emitted array, and at most 1,024 entries retained and classified
+  per directory. Names are scanned to select that prefix, subject to the separate hard
+  name-scan bound below; file contents are never read
+- Directory name scans stop on the first entry beyond 65,536 names per directory. An
+  over-limit directory's entire partial prefix is discarded to keep results independent of
+  operating system order. The tree emits `Skipped: directory name scan limit reached.` and
+  a `directory_scan_limit_exceeded` status; the nested presence scan sets `scan_truncated`.
+  This bounds name iteration, not elapsed time on a blocked filesystem call.
 - Working-tree changes: 100 paths and 4 KiB
 - Recent commits: 8
 - JSON-only listings have no byte budget of their own: `statuses` subjects are escaped names bounded
@@ -359,6 +385,7 @@ bullet is a per-component, read or capture bound, as each one states:
   repository root the filesystem could not decode makes the machine formats exit 1 where Markdown
   still renders
 - Git subprocess output: 16 MiB (bounded while reading)
+- Git status preflight: at most 128 repositories, including initialized nested submodules
 - Candidate file validation: 16 MiB hard read bound
 
 Truncation occurs only at complete UTF-8 and line boundaries and is marked explicitly.
@@ -382,6 +409,13 @@ the remote.
   this is normal after cloning an empty remote.
 - `Ahead / behind: not available` means the commit relationship cannot currently be computed.
   Counts are reported only when the configured upstream commit is available locally.
+- Executable Git clean/process filters can run during `status`, even with optional locks
+  disabled. Before reading status, the loader checks effective repository configuration,
+  including includes, worktree configuration and initialized nested submodules. A non-empty
+  clean/process command causes a safe error with no stdout, even if no current attribute uses
+  it. Disabling a driver silently would change cleanliness semantics. Filter-dependent repositories
+  (including locally configured Git LFS drivers) therefore need ordinary Git inspection outside
+  this loader. Git protocols are also disabled to prevent lazy object retrieval.
 
 ## Exit Codes
 
@@ -406,6 +440,17 @@ Run the complete local check:
 ```bash
 just check
 ```
+
+The lockfile uses public PyPI artifact URLs; no organization mirror or local Renovate preset
+is needed. Renovate keeps scheduled, rate-limited updates and manual merges using a public
+recommended preset plus the repository's explicit settings. Python 3.12 remains the tested
+runtime; widening that range requires testing those interpreters first.
+
+Git test fixtures discard inherited `GIT_*` routing/configuration before creating repositories.
+Permission-sensitive tests must run as a non-root user. Gitea uses `just ci-check`: non-root
+runners execute directly; root containers use `runuser` with an existing account named by
+`CONTEXT_LOADER_CI_USER` (default `ubuntu`). That account must be able to execute the installed
+`uv`, Python and `just`. No `sudo` dependency is required for this CI step.
 
 ## Version maintenance
 

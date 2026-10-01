@@ -1,6 +1,42 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "local>xuanheng-tech/renovate-config"
+    "config:recommended"
+  ],
+  "timezone": "Asia/Shanghai",
+  "schedule": ["* 3-6 * * *"],
+  "minimumReleaseAge": "3 days",
+  "statusCheckWhen": {"artifactError": "always"},
+  "updateNotScheduled": false,
+  "prConcurrentLimit": 2,
+  "prHourlyLimit": 1,
+  "dependencyDashboard": true,
+  "rebaseWhen": "behind-base-branch",
+  "automerge": false,
+  "ignoreScripts": true,
+  "major": {"dependencyDashboardApproval": true},
+  "packageRules": [
+    {
+      "description": "Keep the tested Python runtime range unchanged",
+      "matchManagers": ["pep621"],
+      "matchDepTypes": ["requires-python"],
+      "enabled": false
+    },
+    {
+      "description": "Keep Python Docker runtime within its tested minor version",
+      "matchManagers": ["pyenv"],
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["minor", "major"],
+      "enabled": false
+    },
+    {
+      "description": "Group non-major Python tooling updates",
+      "matchManagers": ["pep621", "github-actions"],
+      "matchPackageNames": ["ruff", "uv-build", "astral-sh/uv"],
+      "matchDepTypes": ["dependency-groups", "build-system.requires", "uses-with"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python tooling"
+    }
   ]
 }

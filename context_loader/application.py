@@ -26,7 +26,6 @@ from .model import (
 from .render import (
     RenderedSourceBody,
     render_markdown_with_details,
-    rendered_source_contents,
 )
 
 # Each value names one exact document shape and is never reused: 1 and 2 are the
@@ -70,9 +69,7 @@ class ContextStatus:
     code: str
     subject_kind: str
     subject: str
-    # The raw fact behind the displayed subject. Display escaping is not injective, so
-    # deduplication must key on this and never on `subject`, or two different directories
-    # could collapse into one claim. It is not serialized.
+    # Deduplicate raw facts independently of display formatting. Not serialized.
     identity: str = field(default="", compare=False)
 
 
@@ -191,7 +188,19 @@ def _build_statuses(
     for entry in project.directory_tree.entries:
         if entry.kind == "unreadable_directory":
             subject = entry.path if entry.path else "."
-            statuses.append(_status("unreadable", "tree_entry", display_text(subject)))
+            statuses.append(
+                _status("unreadable", "tree_entry", display_text(subject), identity=subject)
+            )
+        elif entry.kind == "scan_limit_directory":
+            subject = entry.path if entry.path else "."
+            statuses.append(
+                _status(
+                    "directory_scan_limit_exceeded",
+                    "tree_entry",
+                    display_text(subject),
+                    identity=subject,
+                )
+            )
     tree = project.directory_tree
     named = list(dict.fromkeys(tree.incomplete_directories))
     for path in named:
@@ -212,7 +221,7 @@ def _build_statuses(
                 "directory_listing_incomplete",
                 "tree",
                 f"{tree.incomplete_count} directories exceeded the "
-                f"{tree.enumeration_limit}-entry per-directory enumeration limit; "
+                f"{tree.enumeration_limit}-entry per-directory retention limit; "
                 f"{unnamed} further {stem} not named individually",
                 identity=f"aggregate:{tree.incomplete_count}:{unnamed}",
             )
@@ -254,7 +263,7 @@ def load_project_context(
         raise ContextLoaderError(str(exc), exit_code=2) from None
     rendered = render_markdown_with_details(state, project)
     context = rendered.output.decode("utf-8")
-    rendered_bodies = rendered_source_contents(project, rendered.included_sections)
+    rendered_bodies = rendered.source_bodies
     sources = _sources(state.repository, rendered_bodies)
     statuses = _build_statuses(
         project,

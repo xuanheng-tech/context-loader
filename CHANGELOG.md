@@ -6,6 +6,20 @@ dates.
 
 ## Unreleased
 
+- Refuse status inspection when effective root/submodule config enables executable Git
+  clean/process filters, and disable Git protocols to prevent lazy network reads.
+- Preserve distinct escaped filesystem names (including literal escape sequences and
+  undecodable bytes) and deduplicate unreadable directory observations by their raw paths.
+- Charge truncation markers to the aggregate entry-file budget and share rendered source
+  bodies between Markdown and JSON instead of calculating them twice.
+- Admit AGENTS sections using incremental byte/character/audit costs; build the complete
+  selection/index only once. Document directory caps as retention/classification bounds,
+  since deterministic alphabetical selection still scans names. Stop on the first name
+  beyond 65,536 entries and discard that directory's partial prefix with an explicit status.
+- Isolate test Git routing/configuration from the caller. Use public PyPI lockfile URLs,
+  self-contained Renovate settings and a shared CI check that supports non-root runners
+  and a configurable account for root containers.
+
 - Release control: identify the failing Git operation without echoing arguments or diagnostics.
   Retry only transient reads of the public GitHub repository, at most three attempts with a
   60-second timeout each; permissions, identity conflicts and pushes stop immediately.

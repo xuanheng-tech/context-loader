@@ -22,9 +22,10 @@ DECLARED_COMMANDS_LIMIT_BYTES = 8 * 1024
 DIRECTORY_TREE_LIMIT_BYTES = 12 * 1024
 DIRECTORY_TREE_MAX_ITEMS = 300
 DIRECTORY_TREE_MAX_DEPTH = 2
+DIRECTORY_NAME_SCAN_LIMIT_ENTRIES = 65_536
 # Deliberately above the item budget: which of a directory's own entries are shown must
 # be decided by the item budget and its root-file guarantee, not by enumeration order.
-# It is still a hard cap, so one huge directory can never be materialised in memory.
+# This caps retention/classification; choosing the prefix still scans all names.
 DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY = 512
 # A capped directory is reported once as a number plus a bounded set of examples, so the
 # completeness claim cannot itself inflate the section it describes.
@@ -35,13 +36,12 @@ NESTED_AGENTS_MAX_DIRECTORIES = 2_000
 NESTED_AGENTS_MAX_FILES = 32
 NESTED_AGENTS_MAX_LIST_BYTES = 4 * 1024
 # The presence scan inspects names only and lists no directory entries at all, so it can
-# examine a wider prefix per directory than the tree does; exceeding it is scan truncation.
+# retain a wider prefix per directory than the tree does; exceeding it is scan truncation.
 NESTED_AGENTS_MAX_ENTRIES_PER_DIRECTORY = 1_024
 NESTED_AGENTS_EXCLUDED_DIRECTORIES = frozenset(
     {".git", ".venv", "node_modules", "site-packages", "venv"}
 )
 FILE_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
-MAX_FILE_SCAN_BYTES = FILE_SCAN_LIMIT_BYTES
 TRUNCATION_MARKER = "… truncated by context-loader …"
 
 ENTRY_FILE_SPECS = (
@@ -148,7 +148,7 @@ class DirectoryTree:
     """A bounded directory listing that never overstates what it examined.
 
     ``truncated`` claims that entries exist beyond this listing. A directory holding more
-    entries than one enumeration examines is counted in ``incomplete_count`` against
+    entries than one listing retains is counted in ``incomplete_count`` against
     ``enumeration_limit``, and ``incomplete_directories`` retains only the first
     ``DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT`` of them, so a partial listing of a directory is
     never presented as a complete one and the claim stays bounded however many hit the cap.

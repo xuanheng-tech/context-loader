@@ -41,6 +41,7 @@ class MarkdownRender:
     changes_truncated: bool
     commands_truncated: bool
     tree_truncated: bool
+    source_bodies: tuple[RenderedSourceBody, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,11 +126,10 @@ def _file_body(source: CollectedFile, limit: int) -> tuple[str, bool] | None:
     return body, truncated
 
 
-def _file_payload(source: CollectedFile, limit: int) -> str:
-    body = _file_body(source, limit)
+def _file_payload(source: CollectedFile, body: RenderedSourceBody | None) -> str:
     if body is None:
         return _unavailable_sentence(source.reason)
-    return _fenced(source.language, body[0])
+    return _fenced(source.language, body.body)
 
 
 def _change_lines(state: RepositoryState) -> tuple[list[str], bool]:
@@ -170,13 +170,15 @@ def _render_git_state(state: RepositoryState) -> str:
     return "\n".join(lines)
 
 
-def _render_source_section(title: str, source: CollectedFile, limit: int) -> str:
+def _render_source_section(
+    title: str, source: CollectedFile, body: RenderedSourceBody | None
+) -> str:
     parts = [
         f"## {title}",
         "",
         f"Source: `{source.name}`",
         "",
-        _file_payload(source, limit),
+        _file_payload(source, body),
     ]
     if source.selection is not None:
         parts.extend(("", render_agents_selection_audit(source.selection)))
@@ -226,30 +228,44 @@ def _entry_body(source: CollectedFile, remaining: int) -> tuple[str | None, int,
     if not source.is_text:
         return None, 0, False
     encoded_size = len(source.content.encode())
-    aggregate_truncated = encoded_size > remaining
-    needs_marker = source.truncated or aggregate_truncated
+    limit = max(0, min(remaining, ENTRY_FILE_LIMIT_BYTES))
+    needs_marker = source.truncated or encoded_size > limit
     marker_size = len(TRUNCATION_MARKER.encode()) if needs_marker else 0
-    content_limit = min(remaining, ENTRY_FILE_LIMIT_BYTES - marker_size)
+    content_limit = limit - marker_size
     visible, was_cut = _truncate_at_line_boundary(source.content, max(0, content_limit))
     needs_marker = needs_marker or was_cut
-    body = f"{visible}{TRUNCATION_MARKER}" if needs_marker else visible
-    return body, len(visible.encode()), needs_marker
+    marker = TRUNCATION_MARKER if needs_marker and limit >= marker_size else ""
+    body = f"{visible}{marker}"
+    return body, len(body.encode()), needs_marker
 
 
-def _entry_payload(source: CollectedFile, remaining: int) -> tuple[str, int]:
-    body, consumed, _truncated = _entry_body(source, remaining)
-    if body is None:
-        return _unavailable_sentence(source.reason), consumed
-    return _fenced(source.language, body), consumed
-
-
-def _render_entry_files(entry_files: tuple[CollectedFile, ...]) -> str:
-    parts = ["## Project Entry Files"]
-    used_content = 0
+def _entry_bodies(entry_files: tuple[CollectedFile, ...]) -> tuple[RenderedSourceBody, ...]:
+    """Meter actual bodies, reserving room for later sources' truncation markers."""
+    marker_size = len(TRUNCATION_MARKER.encode())
+    reserved = sum(
+        marker_size
+        for source in entry_files
+        if source.is_text and (source.content or source.truncated)
+    )
+    used = 0
+    rendered: list[RenderedSourceBody] = []
     for source in entry_files:
-        remaining = max(0, ENTRY_FILES_TOTAL_LIMIT_BYTES - used_content)
-        payload, consumed = _entry_payload(source, remaining)
-        used_content += consumed
+        if source.is_text and (source.content or source.truncated):
+            reserved -= marker_size
+        remaining = max(0, ENTRY_FILES_TOTAL_LIMIT_BYTES - used - reserved)
+        body, consumed, truncated = _entry_body(source, remaining)
+        used += consumed
+        if body is not None:
+            rendered.append(RenderedSourceBody(source, body, truncated))
+    return tuple(rendered)
+
+
+def _render_entry_files(
+    entry_files: tuple[CollectedFile, ...], bodies: dict[str, RenderedSourceBody]
+) -> str:
+    parts = ["## Project Entry Files"]
+    for source in entry_files:
+        payload = _file_payload(source, bodies.get(source.name))
         parts.extend(("", f"### `{source.name}`", "", payload))
     return "\n".join(parts)
 
@@ -286,6 +302,9 @@ def _tree_line(entry: TreeEntry) -> str:
         return f"{path}@"
     if entry.kind == "unreadable_directory":
         return f"{path}/ [Skipped: unreadable.]" if path else "Skipped: unreadable directory."
+    if entry.kind == "scan_limit_directory":
+        note = "Skipped: directory name scan limit reached."
+        return f"{path}/ [{note}]" if path else note
     return path
 
 
@@ -310,8 +329,8 @@ def _incomplete_directory_note(tree: DirectoryTree) -> str:
     limit = tree.enumeration_limit
     return (
         f"Listing incomplete: {tree.incomplete_count} {stem} held more entries than the "
-        f"{limit}-entry per-directory enumeration limit, so only an alphabetically first "
-        f"prefix of each was examined and the rest were neither examined nor listed; this "
+        f"{limit}-entry per-directory retention limit. All names were scanned to select an "
+        f"alphabetically first prefix; only that prefix was retained and classified. This "
         f"section also keeps only as many entries as its own entry and byte budgets allow. "
         f"Named here: {examples}."
     )
@@ -361,6 +380,8 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
     commands_section, commands_truncated = _render_commands(project.commands)
     changes_truncated = _change_lines(state)[1]
     tree_section, tree_truncated = _render_directory_tree(project.directory_tree)
+    all_bodies = _source_bodies(project)
+    bodies = {body.source.name: body for body in all_bodies}
     sections: list[tuple[str, str | None]] = [
         ("Git State", _render_git_state(state)),
         (
@@ -368,15 +389,17 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             _render_source_section(
                 "Development Instructions",
                 project.instructions,
-                AGENTS_LIMIT_BYTES,
+                bodies.get(project.instructions.name),
             ),
         ),
         (
             "Project Overview",
-            _render_source_section("Project Overview", project.overview, README_LIMIT_BYTES),
+            _render_source_section(
+                "Project Overview", project.overview, bodies.get(project.overview.name)
+            ),
         ),
         ("Declared Commands", commands_section),
-        ("Project Entry Files", _render_entry_files(project.entry_files)),
+        ("Project Entry Files", _render_entry_files(project.entry_files, bodies)),
         ("Recent Commits", _render_recent_commits(state.commits)),
         ("Directory Tree", tree_section),
     ]
@@ -417,32 +440,46 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
         changes_truncated=changes_truncated,
         tree_truncated=tree_truncated,
         commands_truncated=commands_truncated,
+        source_bodies=_included_source_bodies(all_bodies, tuple(included_sections)),
+    )
+
+
+def _source_bodies(project: ProjectContext) -> tuple[RenderedSourceBody, ...]:
+    rendered: list[RenderedSourceBody] = []
+    for source, limit in (
+        (project.instructions, AGENTS_LIMIT_BYTES),
+        (project.overview, README_LIMIT_BYTES),
+    ):
+        body = _file_body(source, limit)
+        if body is not None:
+            rendered.append(RenderedSourceBody(source, body[0], body[1]))
+    rendered.extend(_entry_bodies(project.entry_files))
+    return tuple(rendered)
+
+
+def _included_source_bodies(
+    bodies: tuple[RenderedSourceBody, ...], included_sections: tuple[str, ...]
+) -> tuple[RenderedSourceBody, ...]:
+    included = frozenset(included_sections)
+    return tuple(
+        body
+        for body in bodies
+        if (
+            "Development Instructions"
+            if body.source.name == "AGENTS.md"
+            else "Project Overview"
+            if body.source.name == "README.md"
+            else "Project Entry Files"
+        )
+        in included
     )
 
 
 def rendered_source_contents(
     project: ProjectContext, included_sections: tuple[str, ...]
 ) -> tuple[RenderedSourceBody, ...]:
-    """Return source-file bodies that actually appear in the final Markdown context."""
-    included = frozenset(included_sections)
-    rendered: list[RenderedSourceBody] = []
-    if "Development Instructions" in included:
-        body = _file_body(project.instructions, AGENTS_LIMIT_BYTES)
-        if body is not None:
-            rendered.append(RenderedSourceBody(project.instructions, body[0], body[1]))
-    if "Project Overview" in included:
-        body = _file_body(project.overview, README_LIMIT_BYTES)
-        if body is not None:
-            rendered.append(RenderedSourceBody(project.overview, body[0], body[1]))
-    if "Project Entry Files" in included:
-        used_content = 0
-        for source in project.entry_files:
-            remaining = max(0, ENTRY_FILES_TOTAL_LIMIT_BYTES - used_content)
-            body, consumed, truncated = _entry_body(source, remaining)
-            used_content += consumed
-            if body is not None:
-                rendered.append(RenderedSourceBody(source, body, truncated))
-    return tuple(rendered)
+    """Return source-file bodies under the same budgets used by the Markdown renderer."""
+    return _included_source_bodies(_source_bodies(project), included_sections)
 
 
 def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:

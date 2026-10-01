@@ -794,6 +794,63 @@ def test_json_nested_context_sanitizes_undecodable_names(tmp_path: Path) -> None
     assert json.loads(compact.stdout)["nested_context"] == document["nested_context"]
 
 
+def test_nested_paths_and_unreadable_statuses_preserve_distinct_names(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    names = ("`", r"\x60", os.fsdecode(b"\x80"), "\u0080", r"\x80")
+    for name in names:
+        directory = repo / name
+        directory.mkdir()
+        (directory / "AGENTS.md").write_text("x\n", encoding="utf-8")
+    full = _run(repo, output_format="json")
+    assert full.returncode == 0
+    document = json.loads(full.stdout)
+    paths = document["nested_context"]["files"]
+    assert set(paths) == {
+        r"\x60/AGENTS.md",
+        r"\\x60/AGENTS.md",
+        r"\x80/AGENTS.md",
+        r"\u0080/AGENTS.md",
+        r"\\x80/AGENTS.md",
+    }
+    assert len(paths) == len(names)
+
+    for name in names[:2]:
+        (repo / name).chmod(0o000)
+    try:
+        full = _run(repo, output_format="json")
+        assert full.returncode == 0
+        statuses = json.loads(full.stdout)["statuses"]
+        unreadable = [item for item in statuses if item["code"] == "unreadable"]
+        assert {item["subject"] for item in unreadable} == {r"\x60", r"\\x60"}
+        assert len(unreadable) == 2
+    finally:
+        for name in names[:2]:
+            (repo / name).chmod(0o700)
+
+
+def test_entry_body_budget_includes_markers_and_matches_context(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    names = ("pyproject.toml", "justfile", "package.json", "Makefile", "Cargo.toml", "go.mod")
+    for name in names:
+        (repo / name).write_text("界\n" * 2048, encoding="utf-8")
+    full = _run(repo, output_format="json")
+    assert full.returncode == 0
+    document = json.loads(full.stdout)
+    sources = [source for source in document["sources"] if source["kind"] == "entry_file"]
+    assert len(sources) == len(names)
+    assert sum(len(source["content"].encode("utf-8")) for source in sources) <= 24 * 1024
+    truncated = {
+        status["subject"] for status in document["statuses"] if status["code"] == "truncated"
+    }
+    for source in sources:
+        body = source["content"]
+        assert len(body.encode("utf-8")) <= 8 * 1024
+        assert body in document["context"]
+        assert hashlib.sha256(body.encode("utf-8")).hexdigest() == source["content_sha256"]
+        if Path(source["path"]).name in truncated:
+            assert body.endswith("… truncated by context-loader …")
+
+
 def test_undecodable_repository_root_is_markdown_only(tmp_path: Path) -> None:
     """Pins the documented Limits carve-out: root paths are emitted verbatim, not escaped."""
     root = tmp_path / os.fsdecode(b"xff-\xff-repo")
