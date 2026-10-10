@@ -1,6 +1,7 @@
 .pytest_cache/
 .ruff_cache/
 .venv/
+.ci-runtime/
 .qoder/
 dist/
 pending-dist/

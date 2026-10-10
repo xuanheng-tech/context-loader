@@ -11,19 +11,26 @@ project-context *args:
 test:
     uv run --frozen pytest
 
-# Root CI containers must drop privileges for permission-sensitive tests.
+# Prepare CI-owned Python/cache before running permission-sensitive tests as non-root.
 ci-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ "$(id -u)" -eq 0 ]; then
+        ci_user="${CONTEXT_LOADER_CI_USER:-ubuntu}"
+        if ! id "$ci_user" >/dev/null 2>&1 || [ "$(id -u "$ci_user")" -eq 0 ]; then
+            echo "Set CONTEXT_LOADER_CI_USER to an existing non-root CI account." >&2
+            exit 1
+        fi
+    fi
+    ci_runtime="${RUNNER_TEMP:-$PWD/.ci-runtime}/context-loader-ci"
+    export UV_PYTHON_INSTALL_DIR="$ci_runtime/python"
+    export UV_CACHE_DIR="$ci_runtime/cache"
+    export UV_PYTHON=3.12.13
+    uv python install --no-bin "$UV_PYTHON"
     if [ "$(id -u)" -ne 0 ]; then
         exec just check
     fi
-    ci_user="${CONTEXT_LOADER_CI_USER:-ubuntu}"
-    if ! id "$ci_user" >/dev/null 2>&1 || [ "$(id -u "$ci_user")" -eq 0 ]; then
-        echo "Set CONTEXT_LOADER_CI_USER to an existing non-root CI account." >&2
-        exit 1
-    fi
-    chown -R "$ci_user" .
+    chown -R "$ci_user" . "$ci_runtime"
     exec runuser -u "$ci_user" -- env "PATH=$PATH" just check
 
 check:

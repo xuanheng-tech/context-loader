@@ -447,10 +447,13 @@ recommended preset plus the repository's explicit settings. Python 3.12 remains 
 runtime; widening that range requires testing those interpreters first.
 
 Git test fixtures discard inherited `GIT_*` routing/configuration before creating repositories.
-Permission-sensitive tests must run as a non-root user. Gitea uses `just ci-check`: non-root
-runners execute directly; root containers use `runuser` with an existing account named by
-`CONTEXT_LOADER_CI_USER` (default `ubuntu`). That account must be able to execute the installed
-`uv`, Python and `just`. No `sudo` dependency is required for this CI step.
+Permission-sensitive tests must run as a non-root user. Gitea uses `just ci-check`, which installs
+Python 3.12.13 without user-level executable links and keeps its interpreter/cache under
+`$RUNNER_TEMP/context-loader-ci` (or ignored `.ci-runtime/context-loader-ci` locally).
+Non-root runners execute directly; root containers transfer ownership of that runtime and the
+checkout, then use `runuser` with an existing account named by `CONTEXT_LOADER_CI_USER` (default
+`ubuntu`). That account must be able to execute the installed `uv` and `just`; it does not need
+access to `/root` or a root-owned Python/cache. No `sudo` dependency is required for this CI step.
 
 ## Version maintenance
 

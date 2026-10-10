@@ -6,6 +6,10 @@ dates.
 
 ## Unreleased
 
+- Fix root-runner CI after dropping privileges: prepare Python 3.12.13 and the uv cache in
+  runner-owned storage, transfer their ownership with the checkout, and remove duplicate
+  Gitea Python installation steps. The test user never needs access to `/root`.
+
 ## 1.3.3 - 2026-10-10
 
 - Refuse status inspection when effective root/submodule config enables executable Git
