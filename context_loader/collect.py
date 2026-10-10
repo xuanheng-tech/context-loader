@@ -68,6 +68,9 @@ _MAKE_TARGET_RE = re.compile(
 )
 _ATX_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$")
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+_SHORT_TECHNICAL_TOKENS = frozenset(
+    {"ai", "cd", "ci", "db", "io", "js", "ml", "os", "pr", "qa", "ts", "ui", "ux"}
+)
 _MATCH_TOKEN_STOPWORDS = frozenset(
     {
         "and",
@@ -138,11 +141,35 @@ def _normalized_text(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold()
 
 
+def _is_han_token(value: str) -> bool:
+    return bool(value) and all(
+        unicodedata.name(character, "").startswith("CJK UNIFIED IDEOGRAPH-") for character in value
+    )
+
+
 def _matching_tokens(value: str, stopwords: frozenset[str]) -> frozenset[str]:
     return frozenset(
         token
         for token in _TOKEN_RE.findall(_normalized_text(value))
-        if len(token) >= 3 and token not in stopwords
+        if token not in stopwords
+        and (
+            len(token) >= 3
+            or token in _SHORT_TECHNICAL_TOKENS
+            or (len(token) == 2 and _is_han_token(token))
+        )
+    )
+
+
+def _matched_terms(terms: frozenset[str], tokens: frozenset[str]) -> frozenset[str]:
+    matches = terms & tokens
+    han_terms = tuple(term for term in terms - matches if _is_han_token(term))
+    if not han_terms:
+        return matches
+    # Han text need not delimit words with spaces. Count each query term once,
+    # without introducing substring matching for Latin words or abbreviations.
+    han_tokens = tuple(token for token in tokens if _is_han_token(token))
+    return matches | frozenset(
+        term for term in han_terms if any(term in token for token in han_tokens)
     )
 
 
@@ -334,24 +361,20 @@ def _small_head_end(content: str, sections: tuple[MarkdownSection, ...]) -> int:
 def _section_relevance(
     section: MarkdownSection, signals: _SelectionSignals
 ) -> tuple[int, frozenset[str]]:
-    heading_tokens = frozenset(
-        token
-        for token in section.normalized_heading.split()
-        if len(token) >= 3 and token not in _MATCH_TOKEN_STOPWORDS
-    )
+    heading_tokens = _matching_tokens(section.normalized_heading, _MATCH_TOKEN_STOPWORDS)
     section_tokens = _matching_tokens(section.text, _MATCH_TOKEN_STOPWORDS)
     body_tokens = section_tokens - heading_tokens
     score = 0
     reasons: set[str] = set()
 
-    focus_heading = signals.focus_tokens & heading_tokens
-    focus_body = signals.focus_tokens & body_tokens
+    focus_heading = _matched_terms(signals.focus_tokens, heading_tokens)
+    focus_body = _matched_terms(signals.focus_tokens, body_tokens) - focus_heading
     if focus_heading or focus_body:
         reasons.add("focus_match")
         score += 6 * len(focus_heading) + len(focus_body)
 
-    path_heading = signals.path_tokens & heading_tokens
-    path_body = signals.path_tokens & body_tokens
+    path_heading = _matched_terms(signals.path_tokens, heading_tokens)
+    path_body = _matched_terms(signals.path_tokens, body_tokens) - path_heading
     exact_path = bool(
         signals.normalized_path
         and _normalized_text(signals.normalized_path) in _normalized_text(section.text)

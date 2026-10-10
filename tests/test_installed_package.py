@@ -160,25 +160,30 @@ def repository(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("linked", [False, True], ids=["root", "linked-worktree"])
-@pytest.mark.parametrize("profile", ["short", "long"])
+@pytest.mark.parametrize("profile", ["short", "long", "short-signals"])
 def test_installed_formats_are_deterministic_and_agree(
     installed_cli: Path, repository: Path, linked: bool, profile: str
 ) -> None:
     selection_arguments = []
-    if profile == "long":
+    if profile != "short":
+        focus = "runtime budget" if profile == "long" else "安全 CI"
+        focus_heading = "Runtime Budget" if profile == "long" else "安全规则 CI"
+        path_heading = "Billing Adapter" if profile == "long" else "部署流程"
+        module_path = "modules/billing" if profile == "long" else "modules/部署"
+        oversized_heading = "Runtime Payload Too Large" if profile == "long" else "安全规则过长"
         instructions = (
             "# Synthetic monorepo\n\n## Core Rules\nCORE_RULE_REQUIRED\n\n"
             "## Large Unrelated\nUNRELATED_BODY_NOT_LOADED\n"
             + "unrelated filler line\n"
             * 1000
-            + "\n## Runtime Budget\nFOCUS_RULE_REQUIRED\n"
-            "\n## Billing Adapter\nScope: modules/billing/adapter.py\nPATH_RULE_REQUIRED\n"
-            "\n## Runtime Payload Too Large\nOVERSIZED_RULE_NOT_LOADED\n"
-            + "runtime budget payload that cannot fit\n"
+            + f"\n## {focus_heading}\nFOCUS_RULE_REQUIRED\n"
+            f"\n## {path_heading}\nScope: {module_path}/adapter.py\nPATH_RULE_REQUIRED\n"
+            f"\n## {oversized_heading}\nOVERSIZED_RULE_NOT_LOADED\n"
+            + f"{focus} payload that cannot fit\n"
             * 1000
         )
         (repository / "AGENTS.md").write_text(instructions, encoding="utf-8")
-        module = repository / "modules/billing"
+        module = repository / module_path
         module.mkdir(parents=True)
         (module / "adapter.py").touch()
         (module / "AGENTS.md").write_text("NESTED_RULE_MUST_NOT_LOAD\n", encoding="utf-8")
@@ -194,7 +199,7 @@ def test_installed_formats_are_deterministic_and_agree(
             "-m",
             "monorepo instructions",
         )
-        selection_arguments = ["--focus", "runtime budget", "--path", "modules/billing/adapter.py"]
+        selection_arguments = ["--focus", focus, "--path", f"{module_path}/adapter.py"]
     repo = repository
     if linked:
         repo = repository.parent / "linked"
@@ -227,7 +232,7 @@ def test_installed_formats_are_deterministic_and_agree(
     for source in full["sources"]:
         assert source["content"] in full["context"]
         assert source["content_sha256"] == hashlib.sha256(source["content"].encode()).hexdigest()
-    if profile == "long":
+    if profile != "short":
         for marker in ("CORE_RULE_REQUIRED", "FOCUS_RULE_REQUIRED", "PATH_RULE_REQUIRED"):
             assert marker in full["context"]
         for marker in (
@@ -244,13 +249,13 @@ def test_installed_formats_are_deterministic_and_agree(
             item["heading"]: item["reasons"]
             for item in source["selection"]["indexed_only_sections"]
         }
-        assert "focus_match" in selected["Runtime Budget"]
-        assert "path_match" in selected["Billing Adapter"]
-        assert indexed["Runtime Payload Too Large"] == ["budget_fallback"]
+        assert "focus_match" in selected[focus_heading]
+        assert "path_match" in selected[path_heading]
+        assert indexed[oversized_heading] == ["budget_fallback"]
         assert {"code": "truncated", "subject": "AGENTS.md", "subject_kind": "source"} in full[
             "statuses"
         ]
-        assert full["nested_context"]["files"] == ["modules/billing/AGENTS.md"]
+        assert full["nested_context"]["files"] == [f"{module_path}/AGENTS.md"]
         assert not full["nested_context"]["list_truncated"]
         assert not full["nested_context"]["scan_truncated"]
     full["schema_version"] = 4

@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.5**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.6**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.5'
+uv tool install 'context-loader==1.3.6'
 ```
 
 ```bash
-pip install 'context-loader==1.3.5'
+pip install 'context-loader==1.3.6'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.5`. Install its matching published release or an exact source commit.
+Source version: `1.3.6`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.5'
+uv tool install 'context-loader==1.3.6'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.5'
+pip install 'context-loader==1.3.6'
 ```
 
-For development or source-based installs tracking current repository (`1.3.5`):
+For development or source-based installs tracking current repository (`1.3.6`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -139,7 +139,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.5"
+    "version": "1.3.6"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -259,7 +259,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.5`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.6`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -301,11 +301,19 @@ heading on the first line is still recognized as a heading.
 
 The root `AGENTS.md` is split at Markdown headings outside fenced code blocks. The output always
 starts with complete early sections fitting a 4-KiB head, then adds complete relevant sections in
-source order using exact normalized focus/path tokens and their parent context. Remaining headings
+source order using normalized focus/path tokens and their parent context. Remaining headings
 appear in an explicit index whose body text is not loaded. With no selection signals, only the small
 head and index are emitted. Unsafe heading parsing falls back to a bounded head and an explicit
 manual-recovery notice. A head whose own headings would not fit the budget falls back to the same
 bounded head without a section index; a single instruction file never fails the whole collection.
+
+Matching uses NFKC normalization and case folding. Ordinary tokens require at least three characters;
+two-character Han terms such as `安全` and `部署`, and the technical abbreviations `AI`, `CD`, `CI`,
+`DB`, `IO`, `JS`, `ML`, `OS`, `PR`, `QA`, `TS`, `UI` and `UX`, are also eligible. Han terms can match
+within entirely Han words, so `安全` matches `安全规则`; Latin terms still require complete tokens,
+so `CI` does not match `special`. Existing stopwords, scoring and byte budgets still apply. Repeating
+a Han term in a heading and body does not increase its score. This is literal matching without word
+segmentation, synonyms or translation.
 
 `Omitted source characters` is measured against the whole normalized source, so a bounded source
 scan that ends before EOF still reports the characters it could not select.
@@ -436,7 +444,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.5 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.6 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.

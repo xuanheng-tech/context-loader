@@ -6,6 +6,17 @@ dates.
 
 ## Unreleased
 
+## 1.3.6
+
+- Select late AGENTS sections using two-character Han focus/path terms and common two-letter
+  technical abbreviations. Han terms match inside entirely Han words; Latin abbreviations retain
+  complete-token matching. Repeated heading/body matches count each query term once.
+- Add regression coverage for Chinese titles, fullwidth/case-normalized abbreviations, path
+  components, section bodies, false positives, deterministic ranking and budget-fallback indexing.
+- Extend offline installed-wheel acceptance with Chinese and abbreviation selection in ordinary
+  and linked worktrees across Markdown and both existing JSON schemas; retain byte budgets and
+  zero runtime dependencies.
+
 ## 1.3.5
 
 - Apply one shared 30-second Git collection deadline across discovery, refs, configuration and

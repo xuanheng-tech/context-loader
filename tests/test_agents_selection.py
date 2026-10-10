@@ -173,6 +173,142 @@ def test_multi_token_focus_and_path_match_select_different_late_sections(
     assert "path_match" in _entry(source, "Billing Adapter").reasons
 
 
+@pytest.mark.parametrize(
+    ("focus", "heading"),
+    [
+        ("安全", "安全规则"),
+        ("部署", "部署"),
+        ("测试", "测试流程"),
+        ("ci", "ＣＩ Checks"),
+        *[
+            (word, f"{word.upper()} Rules")
+            for word in ("cd", "ui", "ux", "io", "db", "qa", "ai", "ml", "pr", "os", "js", "ts")
+        ],
+    ],
+)
+def test_short_focus_selects_late_chinese_and_technical_headings(
+    tmp_path: Path, focus: str, heading: str
+) -> None:
+    content = (
+        "# Demo\n\n## Core\nKeep the invariant.\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + f"\n## {heading}\nSHORT_FOCUS_TARGET\n"
+    )
+    assert len(content[: content.index(f"## {heading}")].encode("utf-8")) > AGENTS_LIMIT_BYTES
+
+    source = _collect(tmp_path, content, focus=focus)
+    repeated = collect_project_context(tmp_path / "repo", focus=focus).instructions
+
+    assert "SHORT_FOCUS_TARGET" in source.content
+    assert "focus_match" in _entry(source, heading).reasons
+    assert source == repeated
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+@pytest.mark.parametrize(
+    ("path", "heading"), [("src/安全/handler.py", "安全规则"), ("src/ci/handler.py", "CI Checks")]
+)
+def test_short_path_component_selects_a_late_heading(
+    tmp_path: Path, path: str, heading: str
+) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + f"\n## {heading}\nSHORT_PATH_TARGET\n"
+    )
+
+    source = _collect(tmp_path, content, path=path)
+
+    assert path not in content
+    assert "SHORT_PATH_TARGET" in source.content
+    assert "path_match" in _entry(source, heading).reasons
+
+
+def test_short_focus_also_matches_section_bodies(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Operational Rules\n安全策略、部署流程、测试流程和 CI checks.\nBODY_TARGET\n"
+    )
+
+    source = _collect(tmp_path, content, focus="安全 部署 测试 CI")
+
+    assert "BODY_TARGET" in source.content
+    assert "focus_match" in _entry(source, "Operational Rules").reasons
+
+
+@pytest.mark.parametrize("focus", ["安", "I", "an", "to", "42", "x2", "and"])
+def test_generic_short_words_and_stopwords_do_not_select_late_sections(
+    tmp_path: Path, focus: str
+) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + f"\n## {focus}\nUNRELATED_SHORT_BODY\n"
+    )
+
+    source = _collect(tmp_path, content, focus=focus)
+
+    assert "UNRELATED_SHORT_BODY" not in source.content
+    assert source.selection is not None
+    assert focus in {entry.heading for entry in source.selection.indexed_only_sections}
+
+
+def test_latin_abbreviations_do_not_match_inside_longer_words(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Special Circuit Collision\nFALSE_POSITIVE_BODY\n"
+        "\n## CI Checks\nCI_TARGET\n"
+    )
+
+    source = _collect(tmp_path, content, focus="CI")
+
+    assert "CI_TARGET" in source.content
+    assert "FALSE_POSITIVE_BODY" not in source.content
+
+
+@pytest.mark.parametrize("focus", ["安全", "CI"])
+def test_short_focus_keeps_oversized_sections_in_the_budget_fallback_index(
+    tmp_path: Path, focus: str
+) -> None:
+    content = f"# Demo\n\n## {focus} Rules\n" + "OVERSIZED_SHORT_RULE\n" * 1000
+
+    source = _collect(tmp_path, content, focus=focus)
+
+    assert "OVERSIZED_SHORT_RULE" not in source.content
+    assert source.selection is not None
+    assert next(
+        entry
+        for entry in source.selection.indexed_only_sections
+        if entry.heading == f"{focus} Rules"
+    ).reasons == ("budget_fallback",)
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+def test_repeated_han_term_does_not_out_rank_an_earlier_equally_relevant_section(
+    tmp_path: Path,
+) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## 安全规范\nFIRST_RULE\n"
+        + "filler line\n" * 800
+        + "\n## 安全规则\n安全策略\nSECOND_RULE\n"
+        + "filler line\n" * 800
+    )
+
+    source = _collect(tmp_path, content, focus="安全")
+
+    assert "FIRST_RULE" in source.content
+    assert "SECOND_RULE" not in source.content
+    assert source.selection is not None
+    assert next(
+        entry for entry in source.selection.indexed_only_sections if entry.heading == "安全规则"
+    ).reasons == ("budget_fallback",)
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
 def test_nested_relevant_section_includes_parent_context_once(tmp_path: Path) -> None:
     content = (
         "# Demo\n\n## Core\ncore\n\n"
