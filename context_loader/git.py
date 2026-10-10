@@ -118,8 +118,11 @@ def _read_bounded_process_stdout(
     proc: subprocess.Popen[bytes],
     max_bytes: int,
     timeout_seconds: float,
+    *,
+    deadline: float | None = None,
 ) -> bytes:
-    deadline = time.monotonic() + timeout_seconds
+    if deadline is None:
+        deadline = time.monotonic() + timeout_seconds
     buffer = bytearray()
     assert proc.stdout is not None
     os.set_blocking(proc.stdout.fileno(), False)
@@ -168,9 +171,23 @@ def _read_bounded_process_stdout(
     return bytes(buffer)
 
 
-def _run_git(repo: Path, arguments: tuple[str, ...], *, check: bool = True) -> GitResult:
+def _check_git_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise ContextLoaderError("unable to read repository Git state")
+
+
+def _run_git(
+    repo: Path,
+    arguments: tuple[str, ...],
+    *,
+    check: bool = True,
+    deadline: float | None = None,
+) -> GitResult:
+    command_deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    deadline = command_deadline if deadline is None else min(deadline, command_deadline)
     argv = [GIT_EXECUTABLE, *_GIT_PREFIX, "-C", os.fspath(repo), *arguments]
     try:
+        _check_git_deadline(deadline)
         with subprocess.Popen(  # noqa: S603 - executable and every command are fixed here.
             argv,
             cwd="/",
@@ -179,8 +196,11 @@ def _run_git(repo: Path, arguments: tuple[str, ...], *, check: bool = True) -> G
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         ) as proc:
-            stdout = _read_bounded_process_stdout(proc, MAX_GIT_OUTPUT_BYTES, GIT_TIMEOUT_SECONDS)
+            stdout = _read_bounded_process_stdout(
+                proc, MAX_GIT_OUTPUT_BYTES, GIT_TIMEOUT_SECONDS, deadline=deadline
+            )
             returncode = proc.returncode
+        _check_git_deadline(deadline)
     except ContextLoaderError:
         raise
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -209,6 +229,16 @@ def discover_repository(
     raw_path: str | os.PathLike[str], *, require_canonical_root: bool = False
 ) -> RepositoryLocation:
     """Resolve an absolute directory and discover its non-bare Git worktree root."""
+    return _discover_repository(
+        raw_path,
+        require_canonical_root=require_canonical_root,
+        deadline=time.monotonic() + GIT_TIMEOUT_SECONDS,
+    )
+
+
+def _discover_repository(
+    raw_path: str | os.PathLike[str], *, require_canonical_root: bool, deadline: float
+) -> RepositoryLocation:
     candidate = Path(raw_path)
     if not candidate.is_absolute():
         raise ContextLoaderError("--repo must be an absolute path", exit_code=2)
@@ -219,11 +249,14 @@ def discover_repository(
     if not canonical.is_dir():
         raise ContextLoaderError("--repo must name an existing directory", exit_code=2)
 
-    bare = _run_git(canonical, ("rev-parse", "--is-bare-repository"), check=False)
+    bare = _run_git(
+        canonical, ("rev-parse", "--is-bare-repository"), check=False, deadline=deadline
+    )
     root = _run_git(
         canonical,
         ("rev-parse", "--path-format=absolute", "--show-toplevel"),
         check=False,
+        deadline=deadline,
     )
     if bare.returncode != 0 or root.returncode != 0:
         raise ContextLoaderError(
@@ -243,6 +276,7 @@ def discover_repository(
         raise ContextLoaderError(
             "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
         )
+    _check_git_deadline(deadline)
     return RepositoryLocation(requested_path=canonical, canonical_root=discovered)
 
 
@@ -251,14 +285,18 @@ def validate_repository(raw_path: str | os.PathLike[str]) -> Path:
     return discover_repository(raw_path, require_canonical_root=True).canonical_root
 
 
-def _head_and_branch(repo: Path) -> tuple[str, str, str | None]:
-    symbolic = _run_git(repo, ("symbolic-ref", "--quiet", "--short", "HEAD"), check=False)
+def _head_and_branch(repo: Path, deadline: float) -> tuple[str, str, str | None]:
+    symbolic = _run_git(
+        repo, ("symbolic-ref", "--quiet", "--short", "HEAD"), check=False, deadline=deadline
+    )
     branch_name = (
         _decode_path(_without_one_line_ending(symbolic.stdout))
         if symbolic.returncode == 0
         else None
     )
-    resolved_head = _run_git(repo, ("rev-parse", "--verify", "HEAD^{commit}"), check=False)
+    resolved_head = _run_git(
+        repo, ("rev-parse", "--verify", "HEAD^{commit}"), check=False, deadline=deadline
+    )
     if resolved_head.returncode != 0:
         if branch_name is None:
             raise ContextLoaderError("unable to read repository Git state")
@@ -270,17 +308,17 @@ def _head_and_branch(repo: Path) -> tuple[str, str, str | None]:
     return branch_name or "detached", head, branch_name
 
 
-def _config_value(repo: Path, key: str) -> str | None:
-    result = _run_git(repo, ("config", "--get", key), check=False)
+def _config_value(repo: Path, key: str, deadline: float) -> str | None:
+    result = _run_git(repo, ("config", "--get", key), check=False, deadline=deadline)
     if result.returncode != 0:
         return None
     value = _decode_text(_without_one_line_ending(result.stdout))
     return value or None
 
 
-def _fallback_upstream(repo: Path, branch_name: str) -> str | None:
-    remote = _config_value(repo, f"branch.{branch_name}.remote")
-    merge = _config_value(repo, f"branch.{branch_name}.merge")
+def _fallback_upstream(repo: Path, branch_name: str, deadline: float) -> str | None:
+    remote = _config_value(repo, f"branch.{branch_name}.remote", deadline)
+    merge = _config_value(repo, f"branch.{branch_name}.merge", deadline)
     if remote is None or merge is None:
         return None
     merge_name = merge.removeprefix("refs/heads/")
@@ -289,7 +327,7 @@ def _fallback_upstream(repo: Path, branch_name: str) -> str | None:
     return f"{remote}/{merge_name}"
 
 
-def _upstream_state(repo: Path, branch_name: str | None) -> tuple[str, str]:
+def _upstream_state(repo: Path, branch_name: str | None, deadline: float) -> tuple[str, str]:
     if branch_name is None:
         return "not configured", "not available"
 
@@ -297,9 +335,10 @@ def _upstream_state(repo: Path, branch_name: str | None) -> tuple[str, str]:
         repo,
         ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
         check=False,
+        deadline=deadline,
     )
     if resolved.returncode != 0:
-        configured = _fallback_upstream(repo, branch_name)
+        configured = _fallback_upstream(repo, branch_name, deadline)
         return configured or "not configured", "not available"
 
     upstream = _decode_text(_without_one_line_ending(resolved.stdout))
@@ -309,6 +348,7 @@ def _upstream_state(repo: Path, branch_name: str | None) -> tuple[str, str]:
         repo,
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"),
         check=False,
+        deadline=deadline,
     )
     if divergence.returncode != 0:
         return upstream, "not available"
@@ -318,7 +358,7 @@ def _upstream_state(repo: Path, branch_name: str | None) -> tuple[str, str]:
     return upstream, f"{counts[0].decode('ascii')} / {counts[1].decode('ascii')}"
 
 
-def _ensure_safe_status(repo: Path) -> None:
+def _ensure_safe_status(repo: Path, deadline: float) -> None:
     """Reject executable conversions before status can refresh any index entry.
 
     Attributes can select clean/process drivers even during a read-only status.
@@ -340,6 +380,7 @@ def _ensure_safe_status(repo: Path) -> None:
             current,
             ("config", "--null", "--get-regexp", r"^filter\..*\.(clean|process)$"),
             check=False,
+            deadline=deadline,
         )
         if filters.returncode not in (0, 1):
             raise ContextLoaderError("unable to safely inspect repository Git filters")
@@ -356,7 +397,7 @@ def _ensure_safe_status(repo: Path) -> None:
                 "repository or submodule config enables Git clean/process filters; "
                 "unable to safely inspect working-tree state"
             )
-        index = _run_git(current, ("ls-files", "--stage", "-z"))
+        index = _run_git(current, ("ls-files", "--stage", "-z"), deadline=deadline)
         children: set[Path] = set()
         for record in index.stdout.split(b"\0"):
             metadata, separator, raw_path = record.partition(b"\t")
@@ -375,8 +416,8 @@ def _ensure_safe_status(repo: Path) -> None:
             raise ContextLoaderError("repository submodule inspection exceeded the safety limit")
 
 
-def _working_tree_changes(repo: Path) -> tuple[WorkingTreeChange, ...]:
-    _ensure_safe_status(repo)
+def _working_tree_changes(repo: Path, deadline: float) -> tuple[WorkingTreeChange, ...]:
+    _ensure_safe_status(repo, deadline)
     result = _run_git(
         repo,
         (
@@ -387,6 +428,7 @@ def _working_tree_changes(repo: Path) -> tuple[WorkingTreeChange, ...]:
             "--no-renames",
             "--ignore-submodules=none",
         ),
+        deadline=deadline,
     )
     if not result.stdout:
         return ()
@@ -408,7 +450,7 @@ def _working_tree_changes(repo: Path) -> tuple[WorkingTreeChange, ...]:
     return tuple(sorted(changes, key=lambda change: change.sort_key))
 
 
-def _recent_commits(repo: Path, head: str) -> tuple[RecentCommit, ...]:
+def _recent_commits(repo: Path, head: str, deadline: float) -> tuple[RecentCommit, ...]:
     if head == "unborn":
         return ()
     result = _run_git(
@@ -421,6 +463,7 @@ def _recent_commits(repo: Path, head: str) -> tuple[RecentCommit, ...]:
             "HEAD",
             "--",
         ),
+        deadline=deadline,
     )
     commits: list[RecentCommit] = []
     for line in result.stdout.splitlines():
@@ -443,13 +486,16 @@ def _recent_commits(repo: Path, head: str) -> tuple[RecentCommit, ...]:
 def collect_repository(
     raw_path: str | os.PathLike[str], *, require_canonical_root: bool = True
 ) -> tuple[RepositoryLocation, RepositoryState]:
-    """Discover one repository and collect only the Phase 01 Git fields."""
-    location = discover_repository(raw_path, require_canonical_root=require_canonical_root)
+    """Discover and collect local Git state within one shared elapsed-time budget."""
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    location = _discover_repository(
+        raw_path, require_canonical_root=require_canonical_root, deadline=deadline
+    )
     repository = location.canonical_root
-    branch, head, branch_name = _head_and_branch(repository)
-    upstream, ahead_behind = _upstream_state(repository, branch_name)
-    changes = _working_tree_changes(repository)
-    commits = _recent_commits(repository, head)
+    branch, head, branch_name = _head_and_branch(repository, deadline)
+    upstream, ahead_behind = _upstream_state(repository, branch_name, deadline)
+    changes = _working_tree_changes(repository, deadline)
+    commits = _recent_commits(repository, head, deadline)
     state = RepositoryState(
         repository=repository,
         branch=branch,
@@ -459,6 +505,7 @@ def collect_repository(
         changes=changes,
         commits=commits,
     )
+    _check_git_deadline(deadline)
     return location, state
 
 

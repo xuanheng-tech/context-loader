@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.4**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.5**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.4'
+uv tool install 'context-loader==1.3.5'
 ```
 
 ```bash
-pip install 'context-loader==1.3.4'
+pip install 'context-loader==1.3.5'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.4`. Install its matching published release or an exact source commit.
+Source version: `1.3.5`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.4'
+uv tool install 'context-loader==1.3.5'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.4'
+pip install 'context-loader==1.3.5'
 ```
 
-For development or source-based installs tracking current repository (`1.3.4`):
+For development or source-based installs tracking current repository (`1.3.5`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -139,7 +139,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.4"
+    "version": "1.3.5"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -259,7 +259,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.4`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.5`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -385,6 +385,8 @@ bullet is a per-component, read or capture bound, as each one states:
   repository root the filesystem could not decode makes the machine formats exit 1 where Markdown
   still renders
 - Git subprocess output: 16 MiB (bounded while reading)
+- Git collection: one shared 30-second deadline for repository discovery, configuration/submodule
+  preflight, refs, status and recent commits
 - Git status preflight: at most 128 repositories, including initialized nested submodules
 - Candidate file validation: 16 MiB hard read bound
 
@@ -399,6 +401,12 @@ Symlinked candidate files are skipped, and directory symlinks are not traversed.
 
 Git state is derived only from the working tree and local refs. The command does not fetch or query
 the remote.
+
+All Git commands in one collection share the same elapsed-time budget; each command receives only
+the remaining time. Once that budget expires, the loader stops without starting subsequent commands,
+terminates and reaps a running Git child, and exits with empty stdout. This deadline does not impose
+a hard wall-clock limit on blocked filesystem/process-creation calls or operating-system child
+reaping, and does not cover the later context-file collection.
 
 - An unborn working tree reports its symbolic branch name, such as `Branch: main`, and
   `HEAD: unborn`.
@@ -428,7 +436,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.4 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.5 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
@@ -443,10 +451,12 @@ just check
 
 The shared check also builds a wheel and installs it into a fresh virtual environment. Package
 acceptance runs the installed CLI outside the source checkout, checking deterministic agreement
-between all three formats, linked worktrees, and safe failures. Build and installation run offline
+between all three formats, linked worktrees, long multi-module instructions with focus/path selection,
+explicit truncation and nested-instruction presence, and safe failures. Build and installation run offline
 using the backend cache populated by `uv run --frozen`; the tests use only disposable repositories.
 Git deadline regressions verify that silent, streaming, and stdout-closed child processes are
-terminated and reaped, and that a timeout leaves CLI stdout empty.
+terminated and reaped, that successful commands cannot reset the shared budget, and that process
+creation consumes it. A timeout leaves CLI stdout empty in every output format.
 
 The lockfile uses public PyPI artifact URLs; no organization mirror or local Renovate preset
 is needed. Renovate keeps scheduled, rate-limited updates and manual merges using a public

@@ -6,6 +6,17 @@ dates.
 
 ## Unreleased
 
+## 1.3.5
+
+- Apply one shared 30-second Git collection deadline across discovery, refs, configuration and
+  submodule preflight, status and history. Process creation consumes the budget; expiry stops later
+  commands and preserves safe errors, empty stdout and child termination/reaping.
+- Extend installed-wheel acceptance with long multi-module instructions in ordinary and linked
+  worktrees, checking focus/path selection, budget-fallback indexing, explicit truncation and
+  nested-instruction presence without loading nested bodies.
+- Preserve CLI/schema contracts; verify unchanged context and source selection on real repository
+  inputs.
+
 ## 1.3.4
 
 - Support Python 3.12–3.14 after installed-wheel and full-suite validation on 3.12.13, 3.13.13 and
