@@ -441,6 +441,13 @@ Run the complete local check:
 just check
 ```
 
+The shared check also builds a wheel and installs it into a fresh virtual environment. Package
+acceptance runs the installed CLI outside the source checkout, checking deterministic agreement
+between all three formats, linked worktrees, and safe failures. Build and installation run offline
+using the backend cache populated by `uv run --frozen`; the tests use only disposable repositories.
+Git deadline regressions verify that silent, streaming, and stdout-closed child processes are
+terminated and reaped, and that a timeout leaves CLI stdout empty.
+
 The lockfile uses public PyPI artifact URLs; no organization mirror or local Renovate preset
 is needed. Renovate keeps scheduled, rate-limited updates and manual merges using a public
 recommended preset plus the repository's explicit settings. Python 3.12 remains the tested

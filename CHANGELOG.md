@@ -6,6 +6,10 @@ dates.
 
 ## Unreleased
 
+- Add offline installed-wheel acceptance to the shared quality gate, covering all output formats,
+  deterministic projections, linked worktrees and filter/argument failures outside the checkout.
+- Verify Git deadlines with real bounded child processes, including streaming and closed stdout,
+  and assert process termination/reaping plus the CLI's empty-output failure contract.
 - Fix root-runner CI after dropping privileges: prepare Python 3.12.13 and the uv cache in
   runner-owned storage, transfer their ownership with the checkout, and remove duplicate
   Gitea Python installation steps. The test user never needs access to `/root`.
