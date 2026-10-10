@@ -160,34 +160,43 @@ def repository(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("linked", [False, True], ids=["root", "linked-worktree"])
-@pytest.mark.parametrize("profile", ["short", "long", "short-signals"])
+@pytest.mark.parametrize("profile", ["short", "long", "short-signals", "body-signals"])
 def test_installed_formats_are_deterministic_and_agree(
     installed_cli: Path, repository: Path, linked: bool, profile: str
 ) -> None:
     selection_arguments = []
     if profile != "short":
-        focus = "runtime budget" if profile == "long" else "安全 CI"
-        focus_heading = "Runtime Budget" if profile == "long" else "安全规则 CI"
-        path_heading = "Billing Adapter" if profile == "long" else "部署流程"
-        module_path = "modules/billing" if profile == "long" else "modules/部署"
-        oversized_heading = "Runtime Payload Too Large" if profile == "long" else "安全规则过长"
+        if profile == "body-signals":
+            focus = "future leakage"
+            focus_heading = "Operational Rules"
+            path_heading = "Risk Validation"
+            module_path = "packages/research/risk"
+            oversized_heading = "Payload Too Large"
+        else:
+            focus = "runtime budget" if profile == "long" else "安全 CI"
+            focus_heading = "Runtime Budget" if profile == "long" else "安全规则 CI"
+            path_heading = "Billing Adapter" if profile == "long" else "部署流程"
+            module_path = "modules/billing" if profile == "long" else "modules/部署"
+            oversized_heading = "Runtime Payload Too Large" if profile == "long" else "安全规则过长"
         instructions = (
             "# Synthetic monorepo\n\n## Core Rules\nCORE_RULE_REQUIRED\n\n"
             "## Large Unrelated\nUNRELATED_BODY_NOT_LOADED\n"
             + "unrelated filler line\n"
             * 1000
-            + f"\n## {focus_heading}\nFOCUS_RULE_REQUIRED\n"
+            + f"\n## {focus_heading}\n{focus}\nFOCUS_RULE_REQUIRED\n"
             f"\n## {path_heading}\nScope: {module_path}/adapter.py\nPATH_RULE_REQUIRED\n"
             f"\n## {oversized_heading}\nOVERSIZED_RULE_NOT_LOADED\n"
             + f"{focus} payload that cannot fit\n"
             * 1000
         )
+        if profile == "body-signals":
+            instructions += "\n## Research Notebook Imports\nUNRELATED_RESEARCH_BODY_NOT_LOADED\n"
         (repository / "AGENTS.md").write_text(instructions, encoding="utf-8")
         module = repository / module_path
         module.mkdir(parents=True)
         (module / "adapter.py").touch()
         (module / "AGENTS.md").write_text("NESTED_RULE_MUST_NOT_LOAD\n", encoding="utf-8")
-        _git(repository, "add", "AGENTS.md", "modules")
+        _git(repository, "add", "AGENTS.md", module_path)
         _git(
             repository,
             "-c",
@@ -238,6 +247,7 @@ def test_installed_formats_are_deterministic_and_agree(
         for marker in (
             "UNRELATED_BODY_NOT_LOADED",
             "OVERSIZED_RULE_NOT_LOADED",
+            "UNRELATED_RESEARCH_BODY_NOT_LOADED",
             "NESTED_RULE_MUST_NOT_LOAD",
         ):
             assert marker not in full["context"]

@@ -237,6 +237,128 @@ def test_short_focus_also_matches_section_bodies(tmp_path: Path) -> None:
     assert "focus_match" in _entry(source, "Operational Rules").reasons
 
 
+@pytest.mark.parametrize(
+    ("focus", "body"),
+    [
+        ("future leakage", "Prevent future leakage before accepting a result."),
+        ("cache invalidation drift", "Check cache invalidation and drift."),
+        ("安全 部署", "遵循安全策略和部署流程。"),
+        ("CI QA", "Require CI checks and QA approval."),
+    ],
+)
+def test_distinct_body_focus_terms_select_a_late_section(
+    tmp_path: Path, focus: str, body: str
+) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + f"\n## Operational Rules\n{body}\nBODY_FOCUS_TARGET\n"
+    )
+
+    source = _collect(tmp_path, content, focus=focus)
+
+    assert "BODY_FOCUS_TARGET" in source.content
+    assert "focus_match" in _entry(source, "Operational Rules").reasons
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+@pytest.mark.parametrize("focus", ["future", "future FUTURE future"])
+def test_one_distinct_body_focus_term_does_not_select_a_late_section(
+    tmp_path: Path, focus: str
+) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Operational Rules\n"
+        + "future leakage can affect a result.\n" * 10
+        + "INCIDENTAL_BODY_NOT_LOADED\n"
+    )
+
+    source = _collect(tmp_path, content, focus=focus)
+
+    assert "INCIDENTAL_BODY_NOT_LOADED" not in source.content
+
+
+def test_body_focus_terms_must_match_the_same_section(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## First Gate\nfuture result\nFIRST_BODY_NOT_LOADED\n"
+        "\n## Second Gate\nleakage check\nSECOND_BODY_NOT_LOADED\n"
+    )
+
+    source = _collect(tmp_path, content, focus="future leakage")
+
+    assert "FIRST_BODY_NOT_LOADED" not in source.content
+    assert "SECOND_BODY_NOT_LOADED" not in source.content
+
+
+def test_heading_focus_still_out_ranks_a_body_only_match(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Operational Rules\nfuture leakage alignment\nBODY_RULE_NOT_LOADED\n"
+        + "filler line\n" * 800
+        + "\n## Future Analysis\nHEADING_RULE_REQUIRED\n"
+        + "filler line\n" * 800
+    )
+
+    source = _collect(tmp_path, content, focus="future leakage alignment")
+
+    assert "HEADING_RULE_REQUIRED" in source.content
+    assert "BODY_RULE_NOT_LOADED" not in source.content
+    assert source.selection is not None
+    assert next(
+        entry
+        for entry in source.selection.indexed_only_sections
+        if entry.heading == "Operational Rules"
+    ).reasons == ("budget_fallback",)
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+def test_body_focus_match_over_budget_remains_indexed(tmp_path: Path) -> None:
+    content = "# Demo\n\n## Operational Rules\n" + "future leakage payload\n" * 1000
+
+    source = _collect(tmp_path, content, focus="future leakage")
+
+    assert "future leakage payload" not in source.content
+    assert source.selection is not None
+    assert next(
+        entry
+        for entry in source.selection.indexed_only_sections
+        if entry.heading == "Operational Rules"
+    ).reasons == ("budget_fallback",)
+    assert _aggregate(source) <= AGENTS_LIMIT_BYTES
+
+
+def test_common_research_path_term_does_not_select_unrelated_sections(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Research Notebook Imports\nUNRELATED_NOTEBOOK_BODY\n"
+        "\n## Risk Validation\nRISK_RULE_REQUIRED\n"
+    )
+
+    source = _collect(tmp_path, content, path="packages/research/risk/validator.py")
+
+    assert "RISK_RULE_REQUIRED" in source.content
+    assert "path_match" in _entry(source, "Risk Validation").reasons
+    assert "UNRELATED_NOTEBOOK_BODY" not in source.content
+
+
+def test_explicit_research_focus_remains_eligible(tmp_path: Path) -> None:
+    content = (
+        "# Demo\n\n## Large Unrelated\n"
+        + "unrelated filler line\n" * 1000
+        + "\n## Research Notebook Imports\nRESEARCH_RULE_REQUIRED\n"
+    )
+
+    source = _collect(tmp_path, content, focus="research")
+
+    assert "RESEARCH_RULE_REQUIRED" in source.content
+    assert "focus_match" in _entry(source, "Research Notebook Imports").reasons
+
+
 @pytest.mark.parametrize("focus", ["安", "I", "an", "to", "42", "x2", "and"])
 def test_generic_short_words_and_stopwords_do_not_select_late_sections(
     tmp_path: Path, focus: str

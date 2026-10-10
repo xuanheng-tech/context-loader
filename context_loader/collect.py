@@ -118,9 +118,11 @@ _PATH_TOKEN_STOPWORDS = _MATCH_TOKEN_STOPWORDS | {
     "py",
     "python",
     "quant",
+    "research",
     "scripts",
     "src",
 }
+_MIN_SECTION_RELEVANCE = 4
 _SELECTION_REASON_ORDER = (
     "head",
     "focus_match",
@@ -371,7 +373,11 @@ def _section_relevance(
     focus_body = _matched_terms(signals.focus_tokens, body_tokens) - focus_heading
     if focus_heading or focus_body:
         reasons.add("focus_match")
-        score += 6 * len(focus_heading) + len(focus_body)
+        focus_score = 6 * len(focus_heading) + len(focus_body)
+        # Two distinct terms in one body suffice without outranking a heading match.
+        if len(focus_body) >= 2:
+            focus_score = max(_MIN_SECTION_RELEVANCE, focus_score)
+        score += focus_score
 
     path_heading = _matched_terms(signals.path_tokens, heading_tokens)
     path_body = _matched_terms(signals.path_tokens, body_tokens) - path_heading
@@ -560,7 +566,7 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
     for index, section in enumerate(sections):
         if signals.focus_tokens or signals.path_tokens or signals.normalized_path:
             score, section_reasons = _section_relevance(section, signals)
-            if score >= 4:
+            if score >= _MIN_SECTION_RELEVANCE:
                 ranked.append((score, index, section_reasons))
     ranked.sort(key=lambda item: (-item[0], sections[item[1]].start))
 

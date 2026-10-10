@@ -6,6 +6,16 @@ dates.
 
 ## Unreleased
 
+## 1.3.7
+
+- Select a section when two distinct focus terms match its body even without a heading match.
+  Preserve heading priority, single-term false-positive controls, parent context and byte budgets.
+- Ignore the generic `research` path component when ranking sections, while retaining explicit
+  research focus and specific path signals, to avoid unrelated notebook rules in research packages.
+- Add regressions for body-only English, Han and abbreviation queries, duplicate and split terms,
+  ranking and budget fallback. Extend offline installed-wheel acceptance across ordinary and linked
+  worktrees and all three output formats; document literal matching and omitted-rule recovery.
+
 ## 1.3.6
 
 - Select late AGENTS sections using two-character Han focus/path terms and common two-letter
