@@ -479,6 +479,9 @@ For environments that permit direct public reads but share an exhausted proxy qu
 set the Gitea Actions repository variable `RELEASE_PUBLIC_API_DIRECT=true`. The record
 step appends only public GitHub API/PyPI hosts to the existing proxy bypass lists. Without
 this explicit option, the workflow uses its inherited proxy settings.
+Both existing bypass lists and an explicit `*` wildcard are preserved. Public HTTPS GET
+transport failures get at most three attempts within the existing total retry budget;
+API writes stop on transport failure so their outcome can be verified before retrying.
 
 Release checks use Python 3.12, Git, and the runner's existing OpenSSL CLI. They compare downloaded
 PyPI file bytes, metadata and SHA-256, plus the publisher/tag/commit claims in PyPI's HTTPS-served

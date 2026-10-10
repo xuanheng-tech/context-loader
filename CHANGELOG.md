@@ -11,6 +11,8 @@ dates.
   Gitea Python installation steps. The test user never needs access to `/root`.
 - Preserve both existing proxy bypass lists when enabling direct public release reads.
   HTTP transport failures name the method and service without exposing URLs or diagnostics.
+- Preserve wildcard proxy bypasses and bound transport retries for public HTTPS GET reads.
+  Transport failures in API writes still stop for outcome verification.
 
 ## 1.3.3 - 2026-10-10
 

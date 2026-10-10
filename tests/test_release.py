@@ -5,9 +5,11 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tarfile
+import textwrap
 import urllib.error
 import zipfile
 from pathlib import Path
@@ -427,25 +429,147 @@ def test_missing_package_only_waits_for_release_closure(monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize(
-    ("url", "service"),
+    ("url", "service", "attempts"),
     (
-        ("https://api.github.com/x", "GitHub API"),
-        ("https://pypi.org/x", "PyPI"),
-        ("https://files.pythonhosted.org/x", "PyPI files"),
-        ("https://private-host.invalid/private-path", "Release API"),
+        ("https://api.github.com/x", "GitHub API", 3),
+        ("https://pypi.org/x", "PyPI", 3),
+        ("https://files.pythonhosted.org/x", "PyPI files", 3),
+        ("http://api.github.com/x", "GitHub API", 1),
+        ("https://private-host.invalid/private-path", "Release API", 1),
     ),
 )
 @pytest.mark.parametrize("error", (urllib.error.URLError("private details"), TimeoutError()))
 def test_http_transport_failure_identifies_service_without_url_or_details(
-    monkeypatch: pytest.MonkeyPatch, url: str, service: str, error: Exception
+    monkeypatch: pytest.MonkeyPatch, url: str, service: str, attempts: int, error: Exception
 ) -> None:
+    calls, waits = [], []
+
     def fail(*_args, **_kwargs):
+        calls.append(True)
         raise error
 
+    monkeypatch.setattr(r.time, "sleep", waits.append)
     monkeypatch.setattr(r.urllib.request, "urlopen", fail)
     with pytest.raises(r.ReleaseError) as caught:
         r.request(url)
     assert str(caught.value) == f"release HTTP GET request unavailable ({service})"
+    assert len(calls) == attempts
+    assert waits == [r.PUBLIC_HTTP_DELAY_SECONDS] * (attempts - 1)
+
+
+@pytest.mark.parametrize("error", (urllib.error.URLError("private details"), TimeoutError()))
+def test_public_read_recovers_from_transient_transport(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    calls, waits = [], []
+
+    def open_response(_request, *, timeout):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise error
+        return contextlib.nullcontext(io.BytesIO(b'{"ok": true}'))
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", open_response)
+    monkeypatch.setattr(r.time, "sleep", waits.append)
+    assert r.request("https://pypi.org/x") == b'{"ok": true}'
+    assert calls == [30, 30]
+    assert waits == [r.PUBLIC_HTTP_DELAY_SECONDS]
+
+
+@pytest.mark.parametrize("error", (urllib.error.URLError("private details"), TimeoutError()))
+def test_api_write_transport_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    calls, waits = [], []
+
+    def fail(*_args, **_kwargs):
+        calls.append(True)
+        raise error
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(r.time, "sleep", waits.append)
+    with pytest.raises(r.ReleaseError, match="release HTTP POST request unavailable"):
+        r.request("https://api.github.com/x", method="POST", data={"value": 1})
+    assert len(calls) == 1
+    assert waits == []
+
+
+def test_public_transport_retries_share_the_existing_total_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls, waits = [], []
+
+    def fail(*_args, **_kwargs):
+        calls.append(True)
+        if len(calls) < r.RATE_LIMIT_ATTEMPTS:
+            raise _http_error(403, {"X-RateLimit-Remaining": "0"})
+        raise urllib.error.URLError("private details")
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", fail)
+    monkeypatch.setattr(r.time, "sleep", waits.append)
+    with pytest.raises(r.ReleaseError, match="release HTTP GET request unavailable"):
+        r.request("https://pypi.org/x")
+    assert len(calls) == r.RATE_LIMIT_ATTEMPTS
+    assert waits == [r.RATE_LIMIT_DELAY_SECONDS] * (r.RATE_LIMIT_ATTEMPTS - 1)
+
+
+@pytest.mark.parametrize("direct", ("true", "false"))
+@pytest.mark.parametrize(
+    "bypass",
+    (
+        {},
+        {"NO_PROXY": "local.test"},
+        {"no_proxy": "internal.test"},
+        {"NO_PROXY": "local.test", "no_proxy": "internal.test"},
+        {"NO_PROXY": "local.test", "no_proxy": ""},
+        {"NO_PROXY": "", "no_proxy": "internal.test"},
+        {"NO_PROXY": "*", "no_proxy": "internal.test"},
+        {"NO_PROXY": "local.test", "no_proxy": "*"},
+    ),
+)
+def test_gitea_direct_public_reads_preserve_proxy_bypass(
+    direct: str, bypass: dict[str, str]
+) -> None:
+    workflow = (ROOT / ".gitea/workflows/release.yml").read_text(encoding="utf-8")
+    start = workflow.index("          set -euo pipefail\n")
+    end = workflow.index('          if [ -z "$RELEASE_TAG" ]; then\n', start)
+    script = textwrap.dedent(workflow[start:end])
+    probe = """
+import json, os, urllib.request
+hosts = ("api.github.com", "pypi.org", "files.pythonhosted.org",
+         "local.test", "internal.test", "example.com")
+print(json.dumps({"upper": os.environ.get("NO_PROXY"), "lower": os.environ.get("no_proxy"),
+                  "bypass": {host: urllib.request.proxy_bypass(host) for host in hosts}}))
+"""
+    result = subprocess.run(
+        ("bash", "-c", script + f"{shlex.quote(sys.executable)} - <<'PY'\n{probe}\nPY\n"),
+        env={
+            "PATH": os.defpath,
+            "RELEASE_PUBLIC_API_DIRECT": direct,
+            "https_proxy": "http://proxy.invalid:3128",
+            **bypass,
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    observed = json.loads(result.stdout)
+    if direct == "false":
+        assert observed["upper"] == bypass.get("NO_PROXY")
+        assert observed["lower"] == bypass.get("no_proxy")
+        return
+    assert observed["upper"] == observed["lower"]
+    if "*" in bypass.values():
+        assert all(observed["bypass"].values())
+        return
+    for host in ("api.github.com", "pypi.org", "files.pythonhosted.org"):
+        assert observed["bypass"][host]
+    for value in bypass.values():
+        for host in value.split(","):
+            if host:
+                assert observed["bypass"][host]
+    assert not observed["bypass"]["example.com"]
 
 
 def test_api_refusal_reports_the_bounded_server_message() -> None:

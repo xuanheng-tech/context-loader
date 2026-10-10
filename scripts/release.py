@@ -73,11 +73,13 @@ PROPAGATION_DELAY_SECONDS = 15
 # An unauthenticated public read is limited to 60 requests per hour per source
 # address, and the Gitea sync carries no GitHub credential by design. The window is
 # short relative to the job timeout, so a rate-limited refusal is waited out rather
-# than failing the release closure. Only rate limiting is retried; every other
-# refusal, including a permission refusal, still stops immediately.
+# than failing the release closure. Among HTTP refusals, only rate limiting is
+# retried; other refusals, including permission refusals, stop immediately.
 RATE_LIMIT_ATTEMPTS = 5
 RATE_LIMIT_DELAY_SECONDS = 60
 RATE_LIMIT_MAX_DELAY_SECONDS = 180
+PUBLIC_HTTP_ATTEMPTS = 3
+PUBLIC_HTTP_DELAY_SECONDS = 2
 PUBLIC_GIT_ATTEMPTS = 3
 PUBLIC_GIT_DELAY_SECONDS = 2
 PUBLIC_GIT_TIMEOUT_SECONDS = 60
@@ -271,6 +273,14 @@ def request(url: str, *, token: str = "", method: str = "GET", data: dict | None
     if body is not None:
         headers["Content-Type"] = "application/json"
     operation = urllib.request.Request(url, data=body, headers=headers, method=method)
+    parsed_url = urllib.parse.urlsplit(url)
+    public_service = {
+        "api.github.com": "GitHub API",
+        "pypi.org": "PyPI",
+        "files.pythonhosted.org": "PyPI files",
+    }.get(parsed_url.hostname)
+    public_read = method == "GET" and parsed_url.scheme == "https" and public_service is not None
+    transport_retries = 0
     for remaining in range(RATE_LIMIT_ATTEMPTS - 1, -1, -1):
         try:
             with urllib.request.urlopen(operation, timeout=30) as response:
@@ -286,11 +296,11 @@ def request(url: str, *, token: str = "", method: str = "GET", data: dict | None
                 ) from None
             time.sleep(delay)
         except (urllib.error.URLError, TimeoutError):
-            service = {
-                "api.github.com": "GitHub API",
-                "pypi.org": "PyPI",
-                "files.pythonhosted.org": "PyPI files",
-            }.get(urllib.parse.urlsplit(url).hostname, "Release API")
+            if public_read and remaining and transport_retries < PUBLIC_HTTP_ATTEMPTS - 1:
+                transport_retries += 1
+                time.sleep(PUBLIC_HTTP_DELAY_SECONDS)
+                continue
+            service = public_service or "Release API"
             raise ReleaseError(f"release HTTP {method} request unavailable ({service})") from None
     if len(raw) > 8 * 1024 * 1024:
         raise ReleaseError("release response exceeds 8 MiB")
