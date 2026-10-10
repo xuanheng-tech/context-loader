@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.3**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.4**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.3'
+uv tool install 'context-loader==1.3.4'
 ```
 
 ```bash
-pip install 'context-loader==1.3.3'
+pip install 'context-loader==1.3.4'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.3`. Install its matching published release or an exact source commit.
+Source version: `1.3.4`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.3'
+uv tool install 'context-loader==1.3.4'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.3'
+pip install 'context-loader==1.3.4'
 ```
 
-For development or source-based installs tracking current repository (`1.3.3`):
+For development or source-based installs tracking current repository (`1.3.4`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -68,7 +68,7 @@ part of either distribution; run them from a checkout of the matching tag.
 
 ## Platform and Runtime Requirements
 
-- **Python**: Python 3.12 (`>=3.12,<3.13`). Runtime code uses only the Python standard library with zero runtime dependencies.
+- **Python**: Python 3.12–3.14 (`>=3.12,<3.15`). Runtime code uses only the Python standard library with zero runtime dependencies.
 - **Git**: Requires the standard `git` CLI at the fixed absolute path `/usr/bin/git`. The
   executable is never resolved through `PATH`, so an installation elsewhere is not used and
   every invocation fails with exit `1`. Git runs with a sanitized environment that ignores
@@ -139,7 +139,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.3"
+    "version": "1.3.4"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -259,7 +259,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.3`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.4`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -428,7 +428,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.3 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.4 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
@@ -450,8 +450,9 @@ terminated and reaped, and that a timeout leaves CLI stdout empty.
 
 The lockfile uses public PyPI artifact URLs; no organization mirror or local Renovate preset
 is needed. Renovate keeps scheduled, rate-limited updates and manual merges using a public
-recommended preset plus the repository's explicit settings. Python 3.12 remains the tested
-runtime; widening that range requires testing those interpreters first.
+recommended preset plus the repository's explicit settings. The GitHub quality gate runs on
+Python 3.12.13, 3.13.13 and 3.14.5; the Gitea root-runner gate and release builds use 3.12.13.
+Other interpreter/platform combinations require validation before widening the supported range.
 
 Git test fixtures discard inherited `GIT_*` routing/configuration before creating repositories.
 Permission-sensitive tests must run as a non-root user. Gitea uses `just ci-check`, which installs
@@ -461,6 +462,22 @@ Non-root runners execute directly; root containers transfer ownership of that ru
 checkout, then use `runuser` with an existing account named by `CONTEXT_LOADER_CI_USER` (default
 `ubuntu`). That account must be able to execute the installed `uv` and `just`; it does not need
 access to `/root` or a root-owned Python/cache. No `sudo` dependency is required for this CI step.
+
+### Performance baseline
+
+On Linux with GNU `/usr/bin/time`, measure an explicit installed CLI using an existing empty
+scratch directory:
+
+```bash
+python scripts/benchmark.py --cli /absolute/path/to/project-context --scratch /absolute/empty/scratch
+```
+
+The opt-in benchmark creates only synthetic repositories under that directory and reports median
+elapsed time, peak RSS (KiB) and JSON-compact output bytes over five runs. It checks identical output
+between runs and covers 1,000 AGENTS headings, a 5,000-file directory, and 1,000 untracked files.
+Keep the CLI version, scratch path, interpreter and machine comparable when comparing runs;
+measurements are observations, not timing thresholds in CI. Retain or remove the scratch directory
+through your own temporary-resource workflow after inspection.
 
 ## Version maintenance
 

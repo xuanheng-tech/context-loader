@@ -6,6 +6,12 @@ dates.
 
 ## Unreleased
 
+## 1.3.4
+
+- Support Python 3.12–3.14 after installed-wheel and full-suite validation on 3.12.13, 3.13.13 and
+  3.14.5; maintain the range with a GitHub CI matrix and preserve the existing CLI/schema contracts.
+- Add an opt-in synthetic performance baseline for long instructions, large directory listings
+  and large working-tree status, reporting elapsed time, peak RSS and output bytes.
 - Add offline installed-wheel acceptance to the shared quality gate, covering all output formats,
   deterministic projections, linked worktrees and filter/argument failures outside the checkout.
 - Verify Git deadlines with real bounded child processes, including streaming and closed stdout,
