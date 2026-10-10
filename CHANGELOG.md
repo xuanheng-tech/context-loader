@@ -6,6 +6,8 @@ dates.
 
 ## Unreleased
 
+## 1.3.3 - 2026-10-10
+
 - Refuse status inspection when effective root/submodule config enables executable Git
   clean/process filters, and disable Git protocols to prevent lazy network reads.
 - Preserve distinct escaped filesystem names (including literal escape sequences and
