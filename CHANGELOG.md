@@ -9,6 +9,8 @@ dates.
 - Fix root-runner CI after dropping privileges: prepare Python 3.12.13 and the uv cache in
   runner-owned storage, transfer their ownership with the checkout, and remove duplicate
   Gitea Python installation steps. The test user never needs access to `/root`.
+- Preserve both existing proxy bypass lists when enabling direct public release reads.
+  HTTP transport failures name the method and service without exposing URLs or diagnostics.
 
 ## 1.3.3 - 2026-10-10
 

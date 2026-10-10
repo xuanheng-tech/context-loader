@@ -426,6 +426,28 @@ def test_missing_package_only_waits_for_release_closure(monkeypatch: pytest.Monk
     assert waits == [False, True]
 
 
+@pytest.mark.parametrize(
+    ("url", "service"),
+    (
+        ("https://api.github.com/x", "GitHub API"),
+        ("https://pypi.org/x", "PyPI"),
+        ("https://files.pythonhosted.org/x", "PyPI files"),
+        ("https://private-host.invalid/private-path", "Release API"),
+    ),
+)
+@pytest.mark.parametrize("error", (urllib.error.URLError("private details"), TimeoutError()))
+def test_http_transport_failure_identifies_service_without_url_or_details(
+    monkeypatch: pytest.MonkeyPatch, url: str, service: str, error: Exception
+) -> None:
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", fail)
+    with pytest.raises(r.ReleaseError) as caught:
+        r.request(url)
+    assert str(caught.value) == f"release HTTP GET request unavailable ({service})"
+
+
 def test_api_refusal_reports_the_bounded_server_message() -> None:
     exc = urllib.error.HTTPError(
         "https://api.github.com/repos/owner/name/releases",

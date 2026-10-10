@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RELEASE_PUBLIC_API_DIRECT" = true ]; then
-            public_release_no_proxy="${no_proxy-${NO_PROXY-}}"
+            public_release_no_proxy="${no_proxy-}${no_proxy:+,}${NO_PROXY-}"
             export NO_PROXY="${public_release_no_proxy:+$public_release_no_proxy,}api.github.com,pypi.org,files.pythonhosted.org"
             export no_proxy="$NO_PROXY"
           fi

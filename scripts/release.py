@@ -285,8 +285,13 @@ def request(url: str, *, token: str = "", method: str = "GET", data: dict | None
                     f"release HTTP {method} failed: {exc.code}: {detail(exc)}"
                 ) from None
             time.sleep(delay)
-        except urllib.error.URLError:
-            raise ReleaseError("release HTTP request unavailable") from None
+        except (urllib.error.URLError, TimeoutError):
+            service = {
+                "api.github.com": "GitHub API",
+                "pypi.org": "PyPI",
+                "files.pythonhosted.org": "PyPI files",
+            }.get(urllib.parse.urlsplit(url).hostname, "Release API")
+            raise ReleaseError(f"release HTTP {method} request unavailable ({service})") from None
     if len(raw) > 8 * 1024 * 1024:
         raise ReleaseError("release response exceeds 8 MiB")
     return raw
