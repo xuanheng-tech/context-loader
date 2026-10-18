@@ -134,7 +134,7 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
     assert result.stderr == b""
     document = json.loads(result.stdout)
     assert document["schema_version"] == 3
-    assert document["tool"] == {"name": "context-loader", "version": "1.3.7"}
+    assert document["tool"] == {"name": "context-loader", "version": "1.3.8"}
     assert document["repository"] == {
         "requested_path": os.fspath(repo.resolve()),
         "canonical_root": os.fspath(repo.resolve()),
@@ -1080,6 +1080,40 @@ def test_json_document_schema_versions_name_exact_shapes() -> None:
         application.JSON_SCHEMA_VERSION,
         application.COMPACT_JSON_SCHEMA_VERSION,
     }.isdisjoint({1, 2})
+
+
+@pytest.mark.parametrize("output_format", ["markdown", "json", "json-compact"])
+def test_only_machine_cli_formats_collect_nested_presence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    output_format: str,
+) -> None:
+    from context_loader import collect
+    from context_loader.cli import main
+
+    repo = _repository(tmp_path)
+    scans = 0
+    original = collect.collect_nested_agents_presence
+
+    def counting(repository):
+        nonlocal scans
+        scans += 1
+        return original(repository)
+
+    monkeypatch.setattr(collect, "collect_nested_agents_presence", counting)
+    assert main(["--repo", str(repo), "--format", output_format]) == 0
+    capsys.readouterr()
+    assert scans == (0 if output_format == "markdown" else 1)
+
+
+def test_skipped_nested_presence_remains_explicitly_incomplete(tmp_path: Path) -> None:
+    from context_loader.application import load_project_context
+
+    result = load_project_context(_repository(tmp_path), include_nested_context=False)
+    assert result.nested_context.files == ()
+    assert result.nested_context.scan_truncated is True
+    assert any(status.code == "nested_agents_scan_truncated" for status in result.statuses)
 
 
 def test_one_collected_result_feeds_all_three_renderings(

@@ -7,9 +7,13 @@ import re
 import selectors
 import subprocess
 import time
+from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+
+from .model import MAX_CHANGE_ENTRIES
 
 GIT_EXECUTABLE = "/usr/bin/git"
 GIT_TIMEOUT_SECONDS = 30
@@ -102,10 +106,11 @@ class RepositoryState:
     ahead_behind: str
     changes: tuple[WorkingTreeChange, ...]
     commits: tuple[RecentCommit, ...]
+    changes_truncated: bool = False
 
     @property
     def worktree(self) -> str:
-        return "dirty" if self.changes else "clean"
+        return "dirty" if self.changes or self.changes_truncated else "clean"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,10 +125,12 @@ def _read_bounded_process_stdout(
     timeout_seconds: float,
     *,
     deadline: float | None = None,
+    consume: Callable[[bytes], None] | None = None,
 ) -> bytes:
     if deadline is None:
         deadline = time.monotonic() + timeout_seconds
     buffer = bytearray()
+    total_bytes = 0
     assert proc.stdout is not None
     os.set_blocking(proc.stdout.fileno(), False)
     selector = selectors.DefaultSelector()
@@ -146,11 +153,15 @@ def _read_bounded_process_stdout(
                 continue
             if not chunk:
                 break
-            buffer.extend(chunk)
-            if len(buffer) > max_bytes:
+            total_bytes += len(chunk)
+            if total_bytes > max_bytes:
                 proc.kill()
                 proc.wait()
                 raise ContextLoaderError("repository Git output exceeded the safety limit")
+            if consume is None:
+                buffer.extend(chunk)
+            else:
+                consume(chunk)
     except Exception:
         try:
             proc.kill()
@@ -182,6 +193,7 @@ def _run_git(
     *,
     check: bool = True,
     deadline: float | None = None,
+    consume: Callable[[bytes], None] | None = None,
 ) -> GitResult:
     command_deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
     deadline = command_deadline if deadline is None else min(deadline, command_deadline)
@@ -197,7 +209,11 @@ def _run_git(
             stderr=subprocess.DEVNULL,
         ) as proc:
             stdout = _read_bounded_process_stdout(
-                proc, MAX_GIT_OUTPUT_BYTES, GIT_TIMEOUT_SECONDS, deadline=deadline
+                proc,
+                MAX_GIT_OUTPUT_BYTES,
+                GIT_TIMEOUT_SECONDS,
+                deadline=deadline,
+                consume=consume,
             )
             returncode = proc.returncode
         _check_git_deadline(deadline)
@@ -416,9 +432,43 @@ def _ensure_safe_status(repo: Path, deadline: float) -> None:
             raise ContextLoaderError("repository submodule inspection exceeded the safety limit")
 
 
-def _working_tree_changes(repo: Path, deadline: float) -> tuple[WorkingTreeChange, ...]:
+def _working_tree_changes(
+    repo: Path, deadline: float
+) -> tuple[tuple[WorkingTreeChange, ...], bool]:
+    """Consume all bounded status evidence, retaining only its sorted display prefix."""
     _ensure_safe_status(repo, deadline)
-    result = _run_git(
+    changes: list[WorkingTreeChange] = []
+    sort_keys: list[bytes] = []
+    pending = bytearray()
+    count = 0
+
+    def consume(chunk: bytes) -> None:
+        nonlocal count
+        pending.extend(chunk)
+        start = 0
+        while (end := pending.find(b"\0", start)) >= 0:
+            record = bytes(pending[start:end])
+            start = end + 1
+            if len(record) < 4 or record[2:3] != b" ":
+                raise ContextLoaderError("unable to parse repository Git state")
+            try:
+                status = record[:2].decode("ascii")
+            except UnicodeDecodeError:
+                raise ContextLoaderError("unable to parse repository Git state") from None
+            path = record[3:]
+            if not path:
+                raise ContextLoaderError("unable to parse repository Git state")
+            count += 1
+            position = bisect_right(sort_keys, path)
+            if position < MAX_CHANGE_ENTRIES:
+                sort_keys.insert(position, path)
+                changes.insert(position, WorkingTreeChange(status, _decode_path(path), path))
+                if len(changes) > MAX_CHANGE_ENTRIES:
+                    sort_keys.pop()
+                    changes.pop()
+        del pending[:start]
+
+    _run_git(
         repo,
         (
             "status",
@@ -429,25 +479,11 @@ def _working_tree_changes(repo: Path, deadline: float) -> tuple[WorkingTreeChang
             "--ignore-submodules=none",
         ),
         deadline=deadline,
+        consume=consume,
     )
-    if not result.stdout:
-        return ()
-    if not result.stdout.endswith(b"\0"):
+    if pending:
         raise ContextLoaderError("unable to parse repository Git state")
-
-    changes: list[WorkingTreeChange] = []
-    for record in result.stdout[:-1].split(b"\0"):
-        if len(record) < 4 or record[2:3] != b" ":
-            raise ContextLoaderError("unable to parse repository Git state")
-        try:
-            status = record[:2].decode("ascii")
-        except UnicodeDecodeError:
-            raise ContextLoaderError("unable to parse repository Git state") from None
-        path = record[3:]
-        if not path:
-            raise ContextLoaderError("unable to parse repository Git state")
-        changes.append(WorkingTreeChange(status, _decode_path(path), path))
-    return tuple(sorted(changes, key=lambda change: change.sort_key))
+    return tuple(changes), count > len(changes)
 
 
 def _recent_commits(repo: Path, head: str, deadline: float) -> tuple[RecentCommit, ...]:
@@ -494,7 +530,7 @@ def collect_repository(
     repository = location.canonical_root
     branch, head, branch_name = _head_and_branch(repository, deadline)
     upstream, ahead_behind = _upstream_state(repository, branch_name, deadline)
-    changes = _working_tree_changes(repository, deadline)
+    changes, changes_truncated = _working_tree_changes(repository, deadline)
     commits = _recent_commits(repository, head, deadline)
     state = RepositoryState(
         repository=repository,
@@ -504,6 +540,7 @@ def collect_repository(
         ahead_behind=ahead_behind,
         changes=changes,
         commits=commits,
+        changes_truncated=changes_truncated,
     )
     _check_git_deadline(deadline)
     return location, state

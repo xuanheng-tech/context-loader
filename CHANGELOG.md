@@ -6,6 +6,21 @@ dates.
 
 ## Unreleased
 
+## 1.3.8
+
+- Check nested AGENTS depth and directory budgets before opening children. Count failed opens
+  against the 2,000-directory budget and stop opening siblings once it is exhausted.
+- Report directory entries whose type cannot be determined as unreadable, rather than ordinary
+  files. Preserve explicit unknown/incomplete observations in both machine formats.
+- Skip the unused nested-instruction presence scan for Markdown CLI calls. Machine formats and
+  default application calls retain the scan; an explicitly skipped scan remains marked incomplete.
+- Parse bounded Git status output incrementally and retain only the first 100 changes sorted by
+  raw path bytes. Validate records beyond that prefix and preserve output limits, shared deadlines,
+  dirty-state semantics and truncation statuses.
+- Move pure AGENTS selection and its byte-budgeted audit into `context_loader/agents.py`, sharing
+  it with collection and rendering while preserving existing collection imports and output contracts.
+- Document compact JSON as the preferred model input when separate source bodies are unnecessary.
+
 ## 1.3.7
 
 - Select a section when two distinct focus terms match its body even without a heading match.

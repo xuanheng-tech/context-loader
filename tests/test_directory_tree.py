@@ -92,6 +92,92 @@ def _incomplete_subjects(document: dict[str, object]) -> list[str]:
     ]
 
 
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_nested_directory_budget_stops_before_opening_more_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unreadable: bool
+) -> None:
+    from context_loader import collect
+
+    for index in range(20):
+        (tmp_path / f"dir-{index:02}").mkdir()
+    opened: list[str] = []
+    original = collect.open_child_directory
+
+    def open_child(descriptor: int, name: str) -> int:
+        opened.append(name)
+        if unreadable:
+            raise PermissionError("fixture")
+        return original(descriptor, name)
+
+    monkeypatch.setattr(collect, "NESTED_AGENTS_MAX_DIRECTORIES", 2)
+    monkeypatch.setattr(collect, "open_child_directory", open_child)
+    result = collect.collect_nested_agents_presence(tmp_path)
+
+    # The root and one child exhaust the budget, including a failed child open.
+    assert opened == ["dir-00"]
+    assert result.scan_truncated is True
+
+
+@pytest.mark.parametrize("depth", [0, 1])
+def test_nested_depth_limit_is_checked_before_opening_a_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    from context_loader import collect
+
+    (tmp_path / "child" / "deeper").mkdir(parents=True)
+    (tmp_path / "child" / "AGENTS.md").touch()
+    opened: list[str] = []
+    original = collect.open_child_directory
+
+    def open_child(descriptor: int, name: str) -> int:
+        opened.append(name)
+        return original(descriptor, name)
+
+    monkeypatch.setattr(collect, "NESTED_AGENTS_MAX_DEPTH", depth)
+    monkeypatch.setattr(collect, "open_child_directory", open_child)
+    result = collect.collect_nested_agents_presence(tmp_path)
+
+    assert opened == (["child"] if depth else [])
+    assert result.files == (("child/AGENTS.md",) if depth else ())
+    assert result.scan_truncated is True
+
+
+@pytest.mark.parametrize("method", ["is_dir", "is_symlink"])
+@pytest.mark.parametrize("directory", [False, True])
+def test_failed_entry_classification_is_not_reported_as_a_regular_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, directory: bool
+) -> None:
+    from context_loader import filesystem
+
+    repo = _repository(tmp_path)
+    if directory:
+        (repo / "uncertain").mkdir()
+    else:
+        (repo / "uncertain").touch()
+    original = filesystem._entry_facts
+
+    def fail(**kwargs):
+        raise PermissionError("fixture")
+
+    def entry_facts(entry):
+        if entry.name != "uncertain":
+            return original(entry)
+        from types import SimpleNamespace
+
+        wrapped = SimpleNamespace(name=entry.name, is_dir=entry.is_dir, is_symlink=entry.is_symlink)
+        setattr(wrapped, method, fail)
+        return original(wrapped)
+
+    monkeypatch.setattr(filesystem, "_entry_facts", entry_facts)
+    result, document = _load(repo)
+
+    assert "uncertain [Skipped: unable to classify.]" in _tree(result)[0]
+    assert {"code": "unreadable", "subject_kind": "tree_entry", "subject": "uncertain"} in document[
+        "statuses"
+    ]
+    assert document["nested_context"]["scan_truncated"] is True
+
+
 @pytest.mark.parametrize("at_root", [False, True])
 def test_name_scan_limit_discards_partial_listing_and_reports_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at_root: bool

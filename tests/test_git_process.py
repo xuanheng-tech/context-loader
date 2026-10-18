@@ -23,7 +23,8 @@ def _assert_reaped(process: subprocess.Popen[bytes]) -> None:
 
 
 @pytest.mark.parametrize("mode", ["silent", "streaming", "closed-stdout", "expired"])
-def test_git_output_deadline_kills_and_reaps_the_process(mode: str) -> None:
+@pytest.mark.parametrize("streamed", [False, True])
+def test_git_output_deadline_kills_and_reaps_the_process(mode: str, streamed: bool) -> None:
     code = "import os, time; os.write(1, b'ready\\n'); "
     if mode == "streaming":
         code += "\nfor _ in range(500):\n os.write(1, b'.'); time.sleep(0.01)"
@@ -41,7 +42,12 @@ def test_git_output_deadline_kills_and_reaps_the_process(mode: str) -> None:
         assert process.stdout.readline() == b"ready\n"
         try:
             with pytest.raises(subprocess.TimeoutExpired):
-                git._read_bounded_process_stdout(process, 1024, 0.0 if mode == "expired" else 0.15)
+                git._read_bounded_process_stdout(
+                    process,
+                    1024,
+                    0.0 if mode == "expired" else 0.15,
+                    consume=(lambda chunk: None) if streamed else None,
+                )
             assert process.returncode == -signal.SIGKILL
             assert process.poll() == -signal.SIGKILL
             with pytest.raises(ChildProcessError):
@@ -51,6 +57,76 @@ def test_git_output_deadline_kills_and_reaps_the_process(mode: str) -> None:
                 process.kill()
                 process.wait(timeout=5)
     assert process.stdout.closed
+
+
+@pytest.mark.parametrize("failure", [None, "output_limit", "consumer"])
+def test_streamed_output_keeps_bounds_and_reaps_on_consumer_failure(failure: str | None) -> None:
+    received = 0
+
+    def consume(chunk: bytes) -> None:
+        nonlocal received
+        received += len(chunk)
+        if failure == "consumer":
+            raise git.ContextLoaderError("fixture consumer failure")
+
+    code = "import os, time; os.write(1, b'x' * 131072); "
+    code += "time.sleep(5)" if failure else ""
+    with subprocess.Popen(
+        [sys.executable, "-I", "-c", code],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    ) as process:
+        if failure:
+            with pytest.raises(git.ContextLoaderError):
+                git._read_bounded_process_stdout(
+                    process, 1024 if failure == "output_limit" else 262144, 2, consume=consume
+                )
+            assert process.returncode == -signal.SIGKILL
+        else:
+            assert git._read_bounded_process_stdout(process, 262144, 2, consume=consume) == b""
+            assert received == 131072
+            assert process.returncode == 0
+    _assert_reaped(process)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 65536])
+def test_status_stream_keeps_only_the_sorted_prefix_across_record_boundaries(
+    monkeypatch: pytest.MonkeyPatch, chunk_size: int
+) -> None:
+    from context_loader.model import MAX_CHANGE_ENTRIES
+
+    paths = [f"item-{index:05}".encode() for index in range(205, -1, -1)]
+    paths.extend((b"undecodable-\xff", b"line\nname", b"`", b"\\x60"))
+    payload = b"".join(b"?? " + path + b"\0" for path in paths)
+
+    def run_git(repo, arguments, *, deadline, consume):
+        for start in range(0, len(payload), chunk_size):
+            consume(payload[start : start + chunk_size])
+        return git.GitResult(b"", 0)
+
+    monkeypatch.setattr(git, "_ensure_safe_status", lambda *args: None)
+    monkeypatch.setattr(git, "_run_git", run_git)
+    changes, truncated = git._working_tree_changes(Path("/fixture"), float("inf"))
+
+    assert [change.sort_key for change in changes] == sorted(paths)[:MAX_CHANGE_ENTRIES]
+    assert all(change.status == "??" for change in changes)
+    assert truncated is True
+
+
+@pytest.mark.parametrize("tail", [b"missing terminator", b"bad\0", b"\xff? invalid-status\0"])
+def test_status_stream_validates_records_beyond_its_retained_prefix(
+    monkeypatch: pytest.MonkeyPatch, tail: bytes
+) -> None:
+    def run_git(repo, arguments, *, deadline, consume):
+        consume(b"".join(f"?? item-{index:04}\0".encode() for index in range(200)))
+        consume(tail)
+        return git.GitResult(b"", 0)
+
+    monkeypatch.setattr(git, "_ensure_safe_status", lambda *args: None)
+    monkeypatch.setattr(git, "_run_git", run_git)
+    with pytest.raises(git.ContextLoaderError, match="unable to parse repository Git state"):
+        git._working_tree_changes(Path("/fixture"), float("inf"))
 
 
 def test_git_timeout_leaves_cli_stdout_empty_and_reaps_the_child(

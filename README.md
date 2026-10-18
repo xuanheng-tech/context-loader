@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.7**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.8**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.7'
+uv tool install 'context-loader==1.3.8'
 ```
 
 ```bash
-pip install 'context-loader==1.3.7'
+pip install 'context-loader==1.3.8'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.7`. Install its matching published release or an exact source commit.
+Source version: `1.3.8`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.7'
+uv tool install 'context-loader==1.3.8'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.7'
+pip install 'context-loader==1.3.8'
 ```
 
-For development or source-based installs tracking current repository (`1.3.7`):
+For development or source-based installs tracking current repository (`1.3.8`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -125,6 +125,8 @@ order:
 7. `Directory Tree`
 
 The output has no generated timestamp, AI summary, architecture inference, or diff body.
+The Markdown CLI skips the nested-instruction presence scan, which contributes only to
+the machine formats; this does not change Markdown content or its byte budgets.
 
 ## JSON Output
 
@@ -139,7 +141,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.7"
+    "version": "1.3.8"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -234,6 +236,9 @@ semantics.
 
 ### Compact model consumption (`--format json-compact`)
 
+Model callers should prefer `json-compact` when they consume the assembled `context`;
+use full `json` when a consumer explicitly needs separate source bodies.
+
 `--format json-compact` emits a `schema_version` 4 document: exactly the version-3 document with
 `sources[*].content` omitted. Every other field — `context`, `context_sha256`, `statuses`,
 `nested_context`, `warnings`, `tool`, `repository`, and each source's `ordinal`, `kind`, `scope`,
@@ -259,7 +264,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.7`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.8`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -384,16 +389,22 @@ bullet is a per-component, read or capture bound, as each one states:
   removes that many bytes of entries, and the `truncated` status plus the marker inside the
   fence say so. The heading and the code-fence lines are not metered, so the whole Markdown
   section can exceed 12 KiB by that fixed few dozen bytes.
-- Nested `AGENTS.md` presence scan: depth 4, 2,000 directories, at most 32 reported paths, a
+- Nested `AGENTS.md` presence scan: depth 4, 2,000 directory-open attempts (including the root
+  and failed attempts), at most 32 reported paths, a
   4 KiB budget metered on the emitted array, and at most 1,024 entries retained and classified
   per directory. Names are scanned to select that prefix, subject to the separate hard
   name-scan bound below; file contents are never read
+- A tree entry whose type cannot be determined is shown as `Skipped: unable to classify.`
+  and reports an `unreadable` tree-entry status; it is not presented as an ordinary file.
 - Directory name scans stop on the first entry beyond 65,536 names per directory. An
   over-limit directory's entire partial prefix is discarded to keep results independent of
   operating system order. The tree emits `Skipped: directory name scan limit reached.` and
   a `directory_scan_limit_exceeded` status; the nested presence scan sets `scan_truncated`.
   This bounds name iteration, not elapsed time on a blocked filesystem call.
 - Working-tree changes: 100 paths and 4 KiB
+- Working-tree status is parsed incrementally, retaining only the first 100 paths sorted
+  by raw filesystem bytes. All records remain subject to validation, the shared Git
+  deadline and the 16 MiB output limit, including records beyond the displayed prefix.
 - Recent commits: 8
 - JSON-only listings have no byte budget of their own: `statuses` subjects are escaped names bounded
   by the entry counts above, while `repository` and `sources[*].path` are emitted verbatim, so a
@@ -451,7 +462,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.7 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.8 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.

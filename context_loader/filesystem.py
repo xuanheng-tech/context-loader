@@ -115,6 +115,7 @@ def _entry_facts(entry: os.DirEntry[str]) -> DirectoryEntryFacts:
         is_symlink = entry.is_symlink()
     except OSError:
         is_symlink = False
+        unclassified = True
     return DirectoryEntryFacts(entry.name, is_directory, is_symlink, unclassified)
 
 

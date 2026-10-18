@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from context_loader import collect
+from context_loader import agents
 from context_loader.collect import (
     AGENTS_HEAD_LIMIT_BYTES,
     AGENTS_LIMIT_BYTES,
@@ -509,7 +509,7 @@ def test_selection_does_not_rebuild_the_entire_index_for_each_candidate(
     assert len(content.encode("utf-8")) <= AGENTS_SCAN_LIMIT_BYTES
     renders = 0
     entries_processed = 0
-    original = collect.render_agents_selection_audit
+    original = agents.render_agents_selection_audit
 
     def counting(audit):
         nonlocal renders, entries_processed
@@ -517,7 +517,7 @@ def test_selection_does_not_rebuild_the_entire_index_for_each_candidate(
         entries_processed += len(audit.selected_sections) + len(audit.indexed_only_sections)
         return original(audit)
 
-    monkeypatch.setattr(collect, "render_agents_selection_audit", counting)
+    monkeypatch.setattr(agents, "render_agents_selection_audit", counting)
 
     source = _collect(tmp_path, content, focus="authentication session policy module")
 

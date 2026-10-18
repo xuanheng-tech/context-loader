@@ -42,6 +42,7 @@ NESTED_AGENTS_EXCLUDED_DIRECTORIES = frozenset(
     {".git", ".venv", "node_modules", "site-packages", "venv"}
 )
 FILE_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
+MAX_CHANGE_ENTRIES = 100
 TRUNCATION_MARKER = "… truncated by context-loader …"
 
 ENTRY_FILE_SPECS = (

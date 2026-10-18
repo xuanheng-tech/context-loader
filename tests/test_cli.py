@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"project-context 1.3.7\n"
+    assert result.stdout == b"project-context 1.3.8\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.3.7"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.3.8"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "project-context").read_text(encoding="utf-8") == (
@@ -166,6 +166,30 @@ def test_clean_repository_and_missing_upstream(tmp_path: Path) -> None:
     assert "### Working Tree Changes\n\nNo changes.\n" in output
     assert f"- `{head[:12]}` · " in output
     assert " · baseline\n\n## Directory Tree\n" in output
+
+
+@pytest.mark.parametrize("count", [0, 100, 101])
+def test_collected_changes_keep_the_exact_display_prefix_and_completeness(
+    tmp_path: Path, count: int
+) -> None:
+    from context_loader.application import load_project_context
+    from context_loader.git import collect_repository_state
+
+    repo = _repository(tmp_path)
+    for index in range(count):
+        (repo / f"item-{index:04}").touch()
+    state = collect_repository_state(repo)
+    assert len(state.changes) == min(count, 100)
+    assert state.changes_truncated is (count > 100)
+    assert state.worktree == ("dirty" if count else "clean")
+    assert [change.path for change in state.changes] == [
+        f"item-{index:04}" for index in range(min(count, 100))
+    ]
+    result = load_project_context(repo)
+    assert any(
+        status.code == "truncated" and status.subject_kind == "changes"
+        for status in result.statuses
+    ) is (count > 100)
 
 
 def test_dirty_paths_are_sorted_and_include_tracked_and_untracked(tmp_path: Path) -> None:
@@ -1211,7 +1235,7 @@ def test_oversized_repository_file_in_json_is_omitted_from_sources(
     assert exit_code == 0
     document = json.loads(captured.out)
     assert document["tool"]["name"] == "context-loader"
-    assert document["tool"]["version"] == "1.3.7"
+    assert document["tool"]["version"] == "1.3.8"
     assert not any(source["kind"] == "agents" for source in document["sources"])
     assert "Skipped: unreadable." in document["context"]
 

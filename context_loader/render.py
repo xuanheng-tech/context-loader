@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from .collect import render_agents_selection_audit
+from .agents import render_agents_selection_audit
 from .filesystem import display_text
 from .git import RecentCommit, RepositoryState
 from .model import (
@@ -16,6 +16,7 @@ from .model import (
     DIRECTORY_TREE_LIMIT_BYTES,
     ENTRY_FILE_LIMIT_BYTES,
     ENTRY_FILES_TOTAL_LIMIT_BYTES,
+    MAX_CHANGE_ENTRIES,
     README_LIMIT_BYTES,
     TRUNCATION_MARKER,
     Availability,
@@ -28,7 +29,6 @@ from .model import (
 
 SCHEMA = "context-loader/v0.1"
 GLOBAL_OUTPUT_LIMIT_BYTES = 98_304
-MAX_CHANGE_ENTRIES = 100
 MAX_CHANGE_MARKDOWN_BYTES = 4 * 1024
 GLOBAL_OMISSION = "Omitted: global output limit reached."
 
@@ -144,7 +144,7 @@ def _change_lines(state: RepositoryState) -> tuple[list[str], bool]:
             return lines, True
         lines.append(line)
         used_bytes += line_bytes
-    return lines, False
+    return lines, state.changes_truncated
 
 
 def _render_git_state(state: RepositoryState) -> str:
@@ -302,6 +302,8 @@ def _tree_line(entry: TreeEntry) -> str:
         return f"{path}@"
     if entry.kind == "unreadable_directory":
         return f"{path}/ [Skipped: unreadable.]" if path else "Skipped: unreadable directory."
+    if entry.kind == "unreadable_entry":
+        return f"{path} [Skipped: unable to classify.]"
     if entry.kind == "scan_limit_directory":
         note = "Skipped: directory name scan limit reached."
         return f"{path}/ [{note}]" if path else note

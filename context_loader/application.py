@@ -186,7 +186,7 @@ def _build_statuses(
     if project.directory_tree.truncated or tree_truncated:
         statuses.append(_status("truncated", "tree", "Directory Tree"))
     for entry in project.directory_tree.entries:
-        if entry.kind == "unreadable_directory":
+        if entry.kind in {"unreadable_directory", "unreadable_entry"}:
             subject = entry.path if entry.path else "."
             statuses.append(
                 _status("unreadable", "tree_entry", display_text(subject), identity=subject)
@@ -251,14 +251,24 @@ def load_project_context(
     require_repository_root: bool = False,
     focus: str | None = None,
     path: str | None = None,
+    include_nested_context: bool = True,
 ) -> ProjectContextResult:
-    """Collect one repository once and return its deterministic machine-readable result."""
+    """Collect one repository once and return its deterministic machine-readable result.
+
+    The default includes nested presence for every machine consumer. The Markdown CLI
+    skips that unused scan and retains an explicit incomplete observation in this model.
+    """
     location, state = collect_repository(
         repo,
         require_canonical_root=require_repository_root,
     )
     try:
-        project = collect_project_context(state.repository, focus=focus, path=path)
+        project = collect_project_context(
+            state.repository,
+            focus=focus,
+            path=path,
+            include_nested_context=include_nested_context,
+        )
     except AgentsSelectionInputError as exc:
         raise ContextLoaderError(str(exc), exit_code=2) from None
     rendered = render_markdown_with_details(state, project)

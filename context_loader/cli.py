@@ -74,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             require_repository_root=arguments.format == "markdown",
             focus=arguments.focus,
             path=arguments.target_path,
+            include_nested_context=arguments.format != "markdown",
         )
         if arguments.format == "markdown":
             output = result.context.encode("utf-8")
