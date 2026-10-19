@@ -26,11 +26,17 @@ def test_measure_keeps_real_repository_and_parent_read_only(
     (repo / "README.md").write_text("# Read-only benchmark fixture\n")
     scratch = tmp_path / "scratch"
     scratch.mkdir()
+    cli = scratch / "project-context"
+    cli.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(ROOT)!r})\n"
+        "from context_loader.cli import main\nraise SystemExit(main())\n"
+    )
+    cli.chmod(0o755)
     repo.chmod(0o555)
     foreign.chmod(0o555)
     try:
         result = benchmark.measure(
-            ROOT / "project-context",
+            cli,
             repo,
             2,
             metrics=scratch / "time.txt",
