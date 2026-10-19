@@ -6,6 +6,11 @@ dates.
 
 ## Unreleased
 
+## 1.3.9
+
+- Collect bare-repository and worktree-root facts in one bounded Git query, preserving literal
+  path bytes, canonical-root validation and the shared deadline. Cover unborn, linked and bare
+  repositories, nested paths, whitespace, newlines and undecodable filesystem names.
 - Fetch the public release tag into `FETCH_HEAD` for Gitea synchronization, preserving checkout's
   local tag ref and requiring the exact public tag object remotely. Report fixed, credential-safe
   failure categories and cover repeat synchronization and conflicting annotated objects.

@@ -15,6 +15,80 @@ from context_loader import git
 from context_loader.cli import main
 
 
+@pytest.mark.parametrize("name", ["repo", " leading trailing ", "line\nname\n", "raw-\udcff"])
+def test_discovery_uses_one_process_and_preserves_literal_root_and_nested_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    root = tmp_path / name
+    root.mkdir()
+    subprocess.run(["/usr/bin/git", "init", "--quiet", os.fspath(root)], check=True, timeout=5)
+    nested = root / "nested"
+    nested.mkdir()
+    processes = []
+    popen = subprocess.Popen
+
+    def record_process(*arguments, **kwargs):
+        process = popen(*arguments, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(git.subprocess, "Popen", record_process)
+    assert git.discover_repository(root, require_canonical_root=True) == git.RepositoryLocation(
+        root, root
+    )
+    assert len(processes) == 1
+    assert git.discover_repository(nested) == git.RepositoryLocation(nested, root)
+    assert len(processes) == 2
+    with pytest.raises(git.ContextLoaderError) as caught:
+        git.discover_repository(nested, require_canonical_root=True)
+    assert caught.value.exit_code == 2
+    assert len(processes) == 3
+
+
+def test_discovery_accepts_linked_worktree_root_without_using_common_directory(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "main"
+    root.mkdir()
+    for arguments in (
+        ("init", "--quiet"),
+        (
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ),
+        ("worktree", "add", "--quiet", "-b", "linked", os.fspath(tmp_path / "linked")),
+    ):
+        subprocess.run(["/usr/bin/git", "-C", os.fspath(root), *arguments], check=True, timeout=5)
+    linked = tmp_path / "linked"
+    assert (linked / ".git").is_file()
+    assert git.discover_repository(linked, require_canonical_root=True) == git.RepositoryLocation(
+        linked, linked
+    )
+
+
+@pytest.mark.parametrize("bare", [False, True])
+def test_discovery_rejects_non_worktree_directories(tmp_path: Path, bare: bool) -> None:
+    if bare:
+        subprocess.run(
+            ["/usr/bin/git", "init", "--quiet", "--bare", os.fspath(tmp_path)],
+            check=True,
+            timeout=5,
+        )
+    with pytest.raises(git.ContextLoaderError) as caught:
+        git.discover_repository(tmp_path)
+    assert caught.value.exit_code == 2
+    assert str(caught.value) == "--repo must be the canonical root of a non-bare Git worktree"
+
+
 def _assert_reaped(process: subprocess.Popen[bytes]) -> None:
     assert process.poll() is not None
     assert process.stdout is not None and process.stdout.closed
@@ -195,7 +269,7 @@ def test_cli_stops_when_successful_git_commands_exhaust_the_shared_budget(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "error: unable to read repository Git state\n"
-    assert len(processes) == 2  # No branch/status command starts after discovery exhausts it.
+    assert len(processes) == 2  # No further query starts once the shared budget is exhausted.
     for process in processes:
         assert process.returncode == 0
         _assert_reaped(process)

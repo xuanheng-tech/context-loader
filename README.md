@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.8**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.9**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.8'
+uv tool install 'context-loader==1.3.9'
 ```
 
 ```bash
-pip install 'context-loader==1.3.8'
+pip install 'context-loader==1.3.9'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.8`. Install its matching published release or an exact source commit.
+Source version: `1.3.9`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.8'
+uv tool install 'context-loader==1.3.9'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.8'
+pip install 'context-loader==1.3.9'
 ```
 
-For development or source-based installs tracking current repository (`1.3.8`):
+For development or source-based installs tracking current repository (`1.3.9`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -141,7 +141,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.8"
+    "version": "1.3.9"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -264,7 +264,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.8`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.9`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -462,7 +462,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.8 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.9 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.

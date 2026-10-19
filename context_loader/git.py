@@ -265,25 +265,20 @@ def _discover_repository(
     if not canonical.is_dir():
         raise ContextLoaderError("--repo must name an existing directory", exit_code=2)
 
-    bare = _run_git(
-        canonical, ("rev-parse", "--is-bare-repository"), check=False, deadline=deadline
-    )
-    root = _run_git(
+    location = _run_git(
         canonical,
-        ("rev-parse", "--path-format=absolute", "--show-toplevel"),
+        ("rev-parse", "--is-bare-repository", "--path-format=absolute", "--show-toplevel"),
         check=False,
         deadline=deadline,
     )
-    if bare.returncode != 0 or root.returncode != 0:
-        raise ContextLoaderError(
-            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
-        )
-    if _without_one_line_ending(bare.stdout) != b"false":
+    # Only the first line is metadata; a literal repository path may contain newlines.
+    bare, separator, root = location.stdout.partition(b"\n")
+    if location.returncode != 0 or bare != b"false" or not separator or not root:
         raise ContextLoaderError(
             "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
         )
     try:
-        discovered = Path(_decode_path(_without_one_line_ending(root.stdout))).resolve(strict=True)
+        discovered = Path(_decode_path(_without_one_line_ending(root))).resolve(strict=True)
     except (OSError, RuntimeError):
         raise ContextLoaderError(
             "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
