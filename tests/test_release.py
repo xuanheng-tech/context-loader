@@ -143,6 +143,33 @@ def test_public_git_identity_and_permission_failures_are_not_retried(
 
 
 @pytest.mark.parametrize(
+    ("diagnostic", "category"),
+    [
+        ("[rejected] (would clobber existing tag)", "tag_ref_conflict"),
+        ("authentication failed", "authentication"),
+        ("couldn't find remote ref", "missing_ref"),
+        ("repository not found", "remote_not_found"),
+        ("SSL certificate problem", "certificate"),
+        ("unrecognized failure", "unknown"),
+    ],
+)
+def test_public_git_failure_reports_only_a_fixed_category(
+    monkeypatch: pytest.MonkeyPatch, diagnostic: str, category: str
+) -> None:
+    arguments = ("git", "fetch", "--no-tags", f"https://github.com/{r.PUBLIC_REPOSITORY}.git", SHA)
+    monkeypatch.setattr(
+        r.subprocess,
+        "run",
+        lambda *_, **__: subprocess.CompletedProcess(
+            arguments, 1, "private-output", f"{diagnostic}: https://example.invalid/private-fixture"
+        ),
+    )
+    with pytest.raises(r.ReleaseError) as failure:
+        r.command(*arguments)
+    assert str(failure.value) == f"git fetch failed (exit 1); category={category}"
+
+
+@pytest.mark.parametrize(
     "arguments",
     [
         ("git", "push", "--no-follow-tags", "origin", "HEAD:refs/heads/main"),
@@ -1095,7 +1122,7 @@ def test_gitea_backfill_preserves_tag_object_and_does_not_build(
     monkeypatch.setenv("GITEA_ACTIONS", "true")
     monkeypatch.setenv("RELEASE_TOKEN", "private-fixture")
     monkeypatch.setattr(r, "public_tag_commit", lambda _: SHA)
-    monkeypatch.setattr(r, "identity", lambda *_: RELEASE)
+    monkeypatch.setattr(r, "identity", lambda *_, **__: RELEASE)
     monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {"wheel": "hash"})
 
     def api(url, **kwargs):
@@ -1134,7 +1161,113 @@ def test_gitea_backfill_preserves_tag_object_and_does_not_build(
     assert result["tag_object"] == "c" * 40
     assert all(action[0] == "git" for action in actions)
     assert [a for a in actions if a[1] == "push"] == [
-        ("git", "push", "--no-follow-tags", "origin", f"refs/tags/{TAG}:refs/tags/{TAG}")
+        ("git", "push", "--no-follow-tags", "origin", f"{'c' * 40}:refs/tags/{TAG}")
+    ]
+
+
+@pytest.mark.parametrize("remote_conflict", [False, True])
+def test_gitea_sync_preserves_a_lightweight_checkout_and_exact_remote_tag(
+    repository: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remote_conflict: bool
+) -> None:
+    """Gitea checkout may replace the local annotated tag with its peeled commit."""
+    commit = r.command("git", "rev-parse", "HEAD")
+    public, private = tmp_path / "public.git", tmp_path / "private.git"
+    subprocess.run(["git", "clone", "--bare", "-q", str(repository), str(public)], check=True)
+
+    def annotated(repo: Path, note: str) -> str:
+        raw = (
+            f"object {commit}\ntype commit\ntag {TAG}\n"
+            f"tagger Fixture <fixture@example.invalid> 1 +0000\n\n{note}\n"
+        )
+        return subprocess.run(
+            ["git", "-C", str(repo), "hash-object", "-w", "-t", "tag", "--stdin"],
+            input=raw,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    public_object = annotated(public, "Public release")
+    subprocess.run(
+        ["git", "-C", str(public), "update-ref", f"refs/tags/{TAG}", public_object, commit],
+        check=True,
+    )
+    subprocess.run(["git", "clone", "--bare", "-q", str(public), str(private)], check=True)
+    private_object = (
+        annotated(private, "Conflicting annotation") if remote_conflict else public_object
+    )
+    if remote_conflict:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(private),
+                "update-ref",
+                f"refs/tags/{TAG}",
+                private_object,
+                public_object,
+            ],
+            check=True,
+        )
+    subprocess.run(["git", "remote", "add", "origin", str(private)], check=True)
+    rejected = subprocess.run(
+        ["git", "fetch", "--no-tags", str(public), f"refs/tags/{TAG}:refs/tags/{TAG}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "would clobber existing tag" in rejected.stderr
+
+    monkeypatch.setenv("GITEA_ACTIONS", "true")
+    monkeypatch.setenv("RELEASE_TOKEN", "gitea-fixture")
+    monkeypatch.setattr(r, "public_tag_commit", lambda _: commit)
+    monkeypatch.setattr(r, "pypi_files", lambda *_, **__: {"wheel": "hash"})
+
+    def api(url, **kwargs):
+        if "/releases/tags/" in url:
+            return None
+        return {"commit": {"sha": commit}} if "/tags/" in url else {}
+
+    monkeypatch.setattr(r, "api", api)
+    records = []
+
+    def record(*args, **kwargs):
+        records.append(args[2])
+        return {"status": "PASS"}
+
+    monkeypatch.setattr(r, "release_record", record)
+    original = r.command
+    actions = []
+
+    def command(*args):
+        actions.append(args)
+        if args[:4] == (
+            "git",
+            "fetch",
+            "--no-tags",
+            f"https://github.com/{r.PUBLIC_REPOSITORY}.git",
+        ):
+            args = (*args[:3], str(public), *args[4:])
+        return original(*args)
+
+    monkeypatch.setattr(r, "command", command)
+    if remote_conflict:
+        with pytest.raises(r.ReleaseError, match="Gitea tag object identity conflict"):
+            r.sync_gitea(TAG, "https://gitea.invalid/api/v1", "org/repo")
+        assert records == ["github"]
+    else:
+        for _ in range(2):
+            result = r.sync_gitea(TAG, "https://gitea.invalid/api/v1", "org/repo")
+            assert result["tag_object"] == public_object
+            assert result["commit"] == commit
+        assert records == ["github", "gitea"] * 2
+    assert not any(a[1] == "push" for a in actions)
+    assert all(a[-1] == f"refs/tags/{TAG}" for a in actions if a[1] == "fetch")
+    assert original("git", "rev-parse", f"refs/tags/{TAG}") == commit
+    assert original("git", "ls-remote", "--refs", "origin", f"refs/tags/{TAG}").split() == [
+        private_object,
+        f"refs/tags/{TAG}",
     ]
 
 

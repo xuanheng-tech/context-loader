@@ -1,4 +1,4 @@
-"""Measure the installed CLI on disposable synthetic repositories (Linux/GNU time)."""
+"""Measure synthetic fixtures and an optional read-only repository (Linux/GNU time)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import signal
 import statistics
 import subprocess
@@ -97,12 +98,13 @@ def fixture(scratch: Path, name: str) -> Path:
     return repo
 
 
-def measure(cli: Path, repo: Path, runs: int) -> dict[str, object]:
+def measure(
+    cli: Path, repo: Path, runs: int, *, metrics: Path, output_format: str, warmup: int
+) -> dict[str, object]:
     elapsed = []
     rss = []
     expected = None
-    metrics = repo.parent / "time.txt"
-    for _ in range(runs):
+    for index in range(warmup + runs):
         start = time.perf_counter()
         output = command(
             [
@@ -114,20 +116,27 @@ def measure(cli: Path, repo: Path, runs: int) -> dict[str, object]:
                 "--repo",
                 repo,
                 "--format",
-                "json-compact",
+                output_format,
                 "--focus",
                 "security target",
             ],
-            repo.parent,
+            metrics.parent,
         )
-        elapsed.append(time.perf_counter() - start)
-        rss.append(int(metrics.read_text(encoding="utf-8").strip()))
-        document = json.loads(output)
-        if document["context_sha256"] != hashlib.sha256(document["context"].encode()).hexdigest():
-            raise RuntimeError("benchmark context digest does not match its content")
+        duration = time.perf_counter() - start
+        peak_rss = int(metrics.read_text(encoding="utf-8").strip())
+        if output_format != "markdown":
+            document = json.loads(output)
+            if (
+                document["context_sha256"]
+                != hashlib.sha256(document["context"].encode()).hexdigest()
+            ):
+                raise RuntimeError("benchmark context digest does not match its content")
         if expected is not None and output != expected:
             raise RuntimeError("benchmark output changed between identical invocations")
         expected = output
+        if index >= warmup:
+            elapsed.append(duration)
+            rss.append(peak_rss)
     assert expected is not None
     return {
         "median_seconds": statistics.median(elapsed),
@@ -135,6 +144,9 @@ def measure(cli: Path, repo: Path, runs: int) -> dict[str, object]:
         "max_seconds": max(elapsed),
         "peak_rss_kib": max(rss),
         "output_bytes": len(expected),
+        "output_sha256": hashlib.sha256(expected).hexdigest(),
+        "samples_seconds": elapsed,
+        "samples_rss_kib": rss,
     }
 
 
@@ -145,6 +157,13 @@ def main() -> None:
         "--scratch", type=Path, required=True, help="existing empty absolute directory"
     )
     parser.add_argument("--runs", type=int, choices=range(1, 21), default=5)
+    parser.add_argument("--warmup", type=int, choices=range(6), default=1)
+    parser.add_argument(
+        "--format", choices=("markdown", "json", "json-compact"), default="json-compact"
+    )
+    parser.add_argument(
+        "--repo", type=Path, help="optional existing absolute repository; read-only"
+    )
     arguments = parser.parse_args()
     if not arguments.cli.is_absolute() or not arguments.cli.is_file():
         parser.error("--cli must name an absolute executable file")
@@ -157,14 +176,60 @@ def main() -> None:
         parser.error("--scratch must be user-owned and empty")
     if not os.access("/usr/bin/time", os.X_OK):
         parser.error("benchmarking requires GNU /usr/bin/time")
+    if arguments.repo is not None and (
+        not arguments.repo.is_absolute() or not arguments.repo.is_dir()
+    ):
+        parser.error("--repo must name an existing absolute directory")
+    if arguments.repo is not None:
+        repository = arguments.repo.resolve()
+        try:
+            root = Path(
+                os.fsdecode(
+                    command(
+                        ["/usr/bin/git", "-C", repository, "rev-parse", "--show-toplevel"], scratch
+                    )
+                ).rstrip("\n")
+            ).resolve()
+        except RuntimeError:
+            parser.error("--repo must name a Git working tree root")
+        if repository != root:
+            parser.error("--repo must name the canonical Git working tree root")
+        if scratch.resolve().is_relative_to(root):
+            parser.error("--scratch must be outside --repo")
     version = command([arguments.cli, "--version"], scratch).decode("utf-8").strip()
+    repositories = {
+        name: fixture(scratch, name) for name in ("long-agents", "large-directory", "large-status")
+    }
+    if arguments.repo is not None:
+        repositories["real-repository"] = arguments.repo.resolve()
     results = {
-        name: measure(arguments.cli, fixture(scratch, name), arguments.runs)
-        for name in ("long-agents", "large-directory", "large-status")
+        name: measure(
+            arguments.cli,
+            repo,
+            arguments.runs,
+            metrics=scratch / "time.txt",
+            output_format=arguments.format,
+            warmup=arguments.warmup,
+        )
+        for name, repo in repositories.items()
     }
     print(
         json.dumps(
-            {"cli_version": version, "runs": arguments.runs, "results": results}, sort_keys=True
+            {
+                "cli_version": version,
+                "cli": str(arguments.cli.resolve()),
+                "benchmark_python": platform.python_version(),
+                "platform": platform.platform(),
+                "git_version": command(["/usr/bin/git", "--version"], scratch).decode().strip(),
+                "runs": arguments.runs,
+                "warmup": arguments.warmup,
+                "format": arguments.format,
+                "real_repository": str(arguments.repo.resolve())
+                if arguments.repo is not None
+                else None,
+                "results": results,
+            },
+            sort_keys=True,
         )
     )
 

@@ -508,12 +508,39 @@ scratch directory:
 python scripts/benchmark.py --cli /absolute/path/to/project-context --scratch /absolute/empty/scratch
 ```
 
-The opt-in benchmark creates only synthetic repositories under that directory and reports median
-elapsed time, peak RSS (KiB) and JSON-compact output bytes over five runs. It checks identical output
-between runs and covers 1,000 AGENTS headings, a 5,000-file directory, and 1,000 untracked files.
+The opt-in benchmark creates synthetic repositories under that directory and reports median,
+minimum and maximum elapsed time, peak RSS (KiB), output bytes, digest and individual samples.
+The default measures five runs after one warm-up and checks identical output throughout. It covers
+1,000 AGENTS headings, a 5,000-file directory, and 1,000 untracked files.
+Use `--runs 10 --format json-compact --repo /absolute/working-tree-root` to add an existing
+repository as a read-only case; `--format markdown` and `--format json` measure the other formats.
+The scratch directory must be outside that repository. Fixtures and timing files always remain
+under scratch, including for real-repository measurements. Concurrent repository changes fail the
+output-stability check instead of producing a comparable baseline.
 Keep the CLI version, scratch path, interpreter and machine comparable when comparing runs;
 measurements are observations, not timing thresholds in CI. Retain or remove the scratch directory
 through your own temporary-resource workflow after inspection.
+
+Measured baseline on 2026-10-19: Context Loader 1.3.8, CLI CPython 3.12.13, benchmark Python 3.12.3,
+Git 2.43.0, Linux x86-64 and local NVMe storage. Each case used two warm-ups and ten measured runs;
+outputs were identical within each case. These sequential observations include process startup and
+host load, and provide a baseline for future comparisons under matching conditions. The existing
+repository case describes one local checkout state; its output size changes with repository inputs.
+
+| Case | Format | Median ms | Peak RSS KiB | Output bytes |
+| --- | --- | ---: | ---: | ---: |
+| Long AGENTS | markdown | 90.8 | 20804 | 17304 |
+| Long AGENTS | json | 77.4 | 20612 | 63797 |
+| Long AGENTS | json-compact | 73.4 | 20644 | 59471 |
+| Large directory | markdown | 82.3 | 20136 | 9170 |
+| Large directory | json | 76.5 | 20212 | 11237 |
+| Large directory | json-compact | 70.5 | 19580 | 11233 |
+| Large status | markdown | 80.4 | 19904 | 5986 |
+| Large status | json | 66.3 | 20012 | 7945 |
+| Large status | json-compact | 70.0 | 19904 | 7941 |
+| Existing repository | markdown | 114.0 | 20888 | 29466 |
+| Existing repository | json | 115.2 | 20876 | 55464 |
+| Existing repository | json-compact | 113.6 | 21416 | 33495 |
 
 ## Version maintenance
 
@@ -534,6 +561,15 @@ GitHub `release-record` closes the GitHub Release after package publication. Git
 only verifies the public release, mirrors its exact formal tag object if missing, and closes
 the Gitea Release record. It builds no package and has no PyPI publishing credentials.
 No private endpoint or credential is needed on GitHub.
+
+Public tag fetches use `FETCH_HEAD` without replacing a local tag ref that checkout may have
+materialized as a lightweight tag. Identity checks and any missing-tag push use the fetched
+object; an existing remote tag must match that exact object. Repeating synchronization leaves
+matching tags and records unchanged. Public Git failures report only a fixed diagnostic category,
+never the raw stderr, command arguments or credential-bearing URLs.
+To close an existing published release after a synchronization-script fix, dispatch the Gitea
+`release` workflow from current `master` with that existing tag as its `tag` input. Rerunning an
+older tag-triggered job still executes the script at that old tag.
 
 For environments that permit direct public reads but share an exhausted proxy quota,
 set the Gitea Actions repository variable `RELEASE_PUBLIC_API_DIRECT=true`. The record

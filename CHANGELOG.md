@@ -6,6 +6,12 @@ dates.
 
 ## Unreleased
 
+- Fetch the public release tag into `FETCH_HEAD` for Gitea synchronization, preserving checkout's
+  local tag ref and requiring the exact public tag object remotely. Report fixed, credential-safe
+  failure categories and cover repeat synchronization and conflicting annotated objects.
+- Extend the opt-in benchmark with warm-ups, all three formats, individual samples and a read-only
+  real-repository case whose timing files remain in scratch. Record a measured 1.3.8 baseline.
+
 ## 1.3.8
 
 - Check nested AGENTS depth and directory budgets before opening children. Count failed opens

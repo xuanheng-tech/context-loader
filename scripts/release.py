@@ -126,7 +126,10 @@ def command(*args: str) -> str:
                 return result.stdout.strip()
             if attempt + 1 == attempts or not _transient_git_transport(result.stderr):
                 suffix = f" after {attempt + 1} attempts" if attempt else ""
-                raise ReleaseError(f"{operation} failed (exit {result.returncode}){suffix}")
+                category = f"; category={_public_git_failure(result.stderr)}" if public_read else ""
+                raise ReleaseError(
+                    f"{operation} failed (exit {result.returncode}){suffix}{category}"
+                )
         time.sleep(PUBLIC_GIT_DELAY_SECONDS)
     raise AssertionError("unreachable public Git retry state")
 
@@ -166,6 +169,24 @@ def _transient_git_transport(stderr: str) -> bool:
     )
 
 
+def _public_git_failure(stderr: str) -> str:
+    """Expose a fixed category, never the command, URL, or raw diagnostic."""
+    message = stderr.lower()
+    for category, markers in (
+        ("tag_ref_conflict", ("would clobber existing tag", "local tag would be clobbered")),
+        (
+            "authentication",
+            ("authentication failed", "permission denied", "could not read username"),
+        ),
+        ("missing_ref", ("couldn't find remote ref", "not our ref")),
+        ("remote_not_found", ("repository not found",)),
+        ("certificate", ("certificate",)),
+    ):
+        if any(marker in message for marker in markers):
+            return category
+    return "transport" if _transient_git_transport(stderr) else "unknown"
+
+
 def check_readme_version(readme: str, version: str, package: str = PACKAGE) -> None:
     """Fail when README current-stable or install pins disagree with the release version.
 
@@ -188,11 +209,17 @@ def check_readme_version(readme: str, version: str, package: str = PACKAGE) -> N
         raise ReleaseError("README install version pin does not match package version")
 
 
-def identity(tag: str, expected_sha: str | None = None, *, checkout: bool = False) -> dict:
+def identity(
+    tag: str,
+    expected_sha: str | None = None,
+    *,
+    checkout: bool = False,
+    object_ref: str | None = None,
+) -> dict:
     if TAG_RE.fullmatch(tag) is None:
         raise ReleaseError("invalid formal release tag")
-    tag_object = command("git", "rev-parse", f"refs/tags/{tag}")
-    commit = command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
+    tag_object = command("git", "rev-parse", object_ref or f"refs/tags/{tag}")
+    commit = command("git", "rev-parse", f"{tag_object}^{{commit}}")
     if command("git", "cat-file", "-t", tag_object) == "tag":
         header = command("git", "cat-file", "tag", tag_object).split("\n\n", 1)[0]
         lines = header.splitlines()
@@ -644,9 +671,12 @@ def sync_gitea(tag: str, base: str, repository: str) -> dict:
         "fetch",
         "--no-tags",
         f"https://github.com/{PUBLIC_REPOSITORY}.git",
-        f"refs/tags/{tag}:refs/tags/{tag}",
+        f"refs/tags/{tag}",
     )
-    release = identity(tag, public_commit)
+    # Checkout can materialize a lightweight local ref for an annotated remote tag.
+    # Read the public object from FETCH_HEAD without replacing that checkout ref.
+    raw_tag = command("git", "rev-parse", "FETCH_HEAD")
+    release = identity(tag, public_commit, object_ref=raw_tag)
     hashes = all_pypi_files(release, wait=True)
     if hashes is None:
         return {
@@ -665,10 +695,9 @@ def sync_gitea(tag: str, base: str, repository: str) -> dict:
     if existing is None:
         # Checkout installs a host-scoped ephemeral job credential. Fetching the
         # public tag above does not send that credential to GitHub.
-        command("git", "push", "--no-follow-tags", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
+        command("git", "push", "--no-follow-tags", "origin", f"{raw_tag}:refs/tags/{tag}")
     elif existing["commit"]["sha"] != public_commit:
         raise ReleaseError("Gitea formal tag identity conflict")
-    raw_tag = command("git", "rev-parse", f"refs/tags/{tag}")
     remote = command("git", "ls-remote", "--refs", "origin", f"refs/tags/{tag}")
     if remote.split() != [raw_tag, f"refs/tags/{tag}"]:
         raise ReleaseError("Gitea tag object identity conflict")
