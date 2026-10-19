@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,9 @@ import pytest
 from scripts import benchmark
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.skipif(
+    shutil.which("/usr/bin/time") is None, reason="opt-in benchmark requires GNU time"
+)
 
 
 @pytest.mark.parametrize("output_format", ["markdown", "json", "json-compact"])
