@@ -6,6 +6,10 @@ dates.
 
 ## Unreleased
 
+- Declare the license as the SPDX expression `Apache-2.0` with `license-files` (PEP 639),
+  matching the sibling packages; distribution contents and runtime behavior are unchanged.
+- Add contributor and security-reporting guides.
+
 ## 1.3.9
 
 - Collect bare-repository and worktree-root facts in one bounded Git query, preserving literal
