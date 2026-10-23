@@ -6,6 +6,9 @@ dates.
 
 ## Unreleased
 
+- Docs: move the JSON field contract, root-file selection, limits, Git semantics,
+  performance baseline and release procedures to `docs/reference.md`; the README keeps install,
+  requirements, usage, authority boundary, exit codes and development.
 - Rename the default branch to `main`. Gitea workflows accept `main` and, until the Gitea
   branch is renamed too, `master`; docs refer to `main`.
 - Declare the license as the SPDX expression `Apache-2.0` with `license-files` (PEP 639),
