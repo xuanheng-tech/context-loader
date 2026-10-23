@@ -1031,7 +1031,7 @@ def test_readme_declares_the_enforced_output_bounds() -> None:
     from context_loader import application
     from context_loader.render import GLOBAL_OUTPUT_LIMIT_BYTES
 
-    readme = " ".join((PROJECT_ROOT / "README.md").read_text(encoding="utf-8").split())
+    readme = " ".join((PROJECT_ROOT / "docs" / "reference.md").read_text(encoding="utf-8").split())
     # Each format's final bound is stated on its own terms; no single figure claims both.
     assert f"Markdown stdout: {GLOBAL_OUTPUT_LIMIT_BYTES:,} bytes" in readme
     assert application.JSON_OUTPUT_LIMIT_BYTES == 8 * 1024 * 1024
@@ -1047,7 +1047,7 @@ def test_readme_example_and_help_match_emitted_schema_versions() -> None:
     from context_loader.application import COMPACT_JSON_SCHEMA_VERSION, JSON_SCHEMA_VERSION
     from context_loader.cli import _parser
 
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "docs" / "reference.md").read_text(encoding="utf-8")
     match = re.search(r'"schema_version": (\d+),\n  "tool"', readme)
     assert match is not None
     assert int(match.group(1)) == JSON_SCHEMA_VERSION
