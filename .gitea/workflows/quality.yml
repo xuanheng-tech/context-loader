@@ -3,9 +3,7 @@ name: quality
 on:
   push:
     branches:
-      # `master` stays until the Gitea default branch is renamed to `main` as well.
       - main
-      - master
   pull_request:
 
 permissions:
