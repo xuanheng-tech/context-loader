@@ -15,7 +15,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.9"
+    "version": "1.3.10"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -138,7 +138,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.9`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.10`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.

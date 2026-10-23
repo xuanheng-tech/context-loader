@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.9**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.3.10**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.9'
+uv tool install 'context-loader==1.3.10'
 ```
 
 ```bash
-pip install 'context-loader==1.3.9'
+pip install 'context-loader==1.3.10'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.9`. Install its matching published release or an exact source commit.
+Source version: `1.3.10`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.9'
+uv tool install 'context-loader==1.3.10'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.9'
+pip install 'context-loader==1.3.10'
 ```
 
-For development or source-based installs tracking current repository (`1.3.9`):
+For development or source-based installs tracking current repository (`1.3.10`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -169,7 +169,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.9 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.3.10 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.
