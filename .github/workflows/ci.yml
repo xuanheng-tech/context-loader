@@ -21,3 +21,15 @@ jobs:
       - run: uv python install "$UV_PYTHON"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just check
+
+  shared-quality:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12.13", "3.13.13", "3.14.5"]
+    uses: xuanheng-tech/release-tools/.github/workflows/python-quality.yml@18813cd95ba053cf7da5023ceba851d70222271c
+    with:
+      python-version: ${{ matrix.python }}
+      uv-version: "0.12.5"
