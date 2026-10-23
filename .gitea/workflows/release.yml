@@ -4,7 +4,8 @@ name: release
 # recursively trigger the older tag commit's workflow when backfilling a tag.
 on:
   push:
-    branches: [master]
+    # `master` stays until the Gitea default branch is renamed to `main` as well.
+    branches: [main, master]
     tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:

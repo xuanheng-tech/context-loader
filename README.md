@@ -550,7 +550,7 @@ current-stable declaration plus `context-loader==X.Y.Z`
 install pins must change in the same release-preparation batch. `CHANGELOG.md` is the
 authoritative version-change record. `scripts/release.py` rejects README stable/install
 pins that disagree with the intended package version; historical changelog entries are
-not part of that check. Merging to `master` is not a release; formal publication
+not part of that check. Merging to `main` is not a release; formal publication
 still requires a separately created and pushed tag.
 
 ## Release closure and retries
@@ -568,7 +568,7 @@ object; an existing remote tag must match that exact object. Repeating synchroni
 matching tags and records unchanged. Public Git failures report only a fixed diagnostic category,
 never the raw stderr, command arguments or credential-bearing URLs.
 To close an existing published release after a synchronization-script fix, dispatch the Gitea
-`release` workflow from current `master` with that existing tag as its `tag` input. Rerunning an
+`release` workflow from current `main` with that existing tag as its `tag` input. Rerunning an
 older tag-triggered job still executes the script at that old tag.
 
 For environments that permit direct public reads but share an exhausted proxy quota,
@@ -603,7 +603,7 @@ provenance. This is an identity check, not an independent cryptographic Sigstore
 - If PyPI succeeded but a Release failed, rerun `release-record` on GitHub (manual input: tag)
   and `release` on Gitea. Existing matching records pass; a missing record is created once;
   a draft, differing recorded identity or tag conflict stops without overwriting it.
-- Gitea also retries the current project version on `master` pushes, only after that version has
+- Gitea also retries the current project version on `main` pushes, only after that version has
   a public tag, verified PyPI files and GitHub Release. An unpublished version reports `SKIP`.
   Use the **built-in Actions job token** for exact missing-tag synchronization: Gitea suppresses
   recursive workflows for that actor, including old tag workflows. Never use a PAT for this step.
