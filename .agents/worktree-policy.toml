@@ -1,0 +1,53 @@
+schema_version = 8
+
+[limits]
+normal_limit = 6
+hard_limit = 11
+
+[canonical]
+protected = true
+allowed_roles = ["canonical", "control-plane", "integration", "publication", "verification"]
+
+[slots]
+integration_prepare_limit = 2
+feature_or_audit = 3
+emergency = 1
+recovery_reserve = 1
+retained = 3
+
+[publication]
+main_publish_limit = 1
+remote = "origin"
+branch = "main"
+
+[release]
+automatic_feature_audit = true
+automatic_integration_continuation = false
+preserved_auto_release = false
+intent_ttl_seconds = 3600
+
+[reconciler]
+enabled = true
+actor = "lifecycle-reconciler"
+allow_legacy_adoption = false
+
+[admission]
+strategy = "resource-budget-v1"
+checkout_growth_bytes = 2147483648
+checkout_growth_inodes = 100000
+
+[review]
+stale_warning_days = 7
+
+[authority]
+require_adoption = true
+require_task_key = true
+require_authority_key = true
+unique_active_feature_authority = true
+
+[convergence]
+enabled = true
+grace_minutes = 30
+idle_hours_max = 72
+idle_hours_min = 6
+standing_reserve = 3
