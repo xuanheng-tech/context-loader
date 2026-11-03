@@ -1215,6 +1215,7 @@ def test_gitea_sync_preserves_a_lightweight_checkout_and_exact_remote_tag(
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "LC_ALL": "C"},
     )
     assert rejected.returncode != 0
     assert "would clobber existing tag" in rejected.stderr
