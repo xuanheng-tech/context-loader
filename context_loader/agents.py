@@ -8,6 +8,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
+from .filesystem import display_text
 from .model import (
     AGENTS_FOCUS_LIMIT_BYTES,
     AGENTS_HEAD_LIMIT_BYTES,
@@ -64,16 +65,11 @@ _PATH_TOKEN_STOPWORDS = _MATCH_TOKEN_STOPWORDS | {
     "data",
     "doc",
     "frontend",
-    "ingestion",
     "lib",
     "package",
     "packages",
-    "platform",
-    "provider",
-    "providers",
     "py",
     "python",
-    "quant",
     "research",
     "scripts",
     "src",
@@ -175,7 +171,7 @@ _AUDIT_NO_INDEX_LINE = "- Omitted content has no available heading index; read t
 
 
 def _audit_heading(heading: str) -> str:
-    safe = heading.replace("`", r"\x60").strip()
+    safe = display_text(heading).strip()
     if len(safe) <= 160:
         return safe
     return f"{safe[:159]}…"
@@ -240,7 +236,9 @@ def _fence_marker(line: str) -> tuple[str, int, str] | None:
     return character, length, stripped[length:]
 
 
-def _parse_markdown_sections(content: str) -> tuple[MarkdownSection, ...]:
+def _parse_markdown_sections(
+    content: str, *, allow_unclosed_eof_fence: bool = False
+) -> tuple[MarkdownSection, ...]:
     headings: list[tuple[str, int, int]] = []
     offset = 0
     open_fence: tuple[str, int] | None = None
@@ -255,17 +253,19 @@ def _parse_markdown_sections(content: str) -> tuple[MarkdownSection, ...]:
             offset += len(line)
             continue
         if marker is not None:
-            character, length, _remainder = marker
-            open_fence = (character, length)
-            offset += len(line)
-            continue
+            character, length, remainder = marker
+            # CommonMark §4.5: backtick code fences cannot have backticks in their info string.
+            if character == "~" or "`" not in remainder:
+                open_fence = (character, length)
+                offset += len(line)
+                continue
         match = _ATX_HEADING_RE.fullmatch(visible)
         if match is not None:
             heading = (match.group(2) or "").rstrip()
             heading = re.sub(r"[ \t]+#+[ \t]*$", "", heading).strip()
             headings.append((heading, len(match.group(1)), offset))
         offset += len(line)
-    if open_fence is not None:
+    if open_fence is not None and not allow_unclosed_eof_fence:
         raise MarkdownSectionParseError("unclosed fenced code block")
 
     sections: list[MarkdownSection] = []
@@ -378,6 +378,7 @@ def _selection_state(
     reasons: dict[int, set[str]],
     budget_fallback: frozenset[int],
     *,
+    partial_head_index: int | None = None,
     parse_fallback: bool,
     source_scan_truncated: bool,
     source_characters: int,
@@ -398,13 +399,23 @@ def _selection_state(
     for index, section in enumerate(sections):
         if _interval_is_covered(section.start, section.end, merged, merged_starts):
             entry_reasons = set(reasons.get(index, set()))
-            if section.end <= head_end:
+            if section.end <= head_end or index == partial_head_index:
                 entry_reasons.add("head")
             selected_entries.append(
                 AgentsSectionAuditEntry(
                     section.heading,
                     section.heading_level,
                     _ordered_reasons(entry_reasons),
+                )
+            )
+        elif index == partial_head_index and section.start < head_end:
+            # The small head loaded a prefix of sections[0] because sections[0].start == 0
+            # exceeded 4 KiB; record it as loaded by head rather than indexed-only.
+            selected_entries.append(
+                AgentsSectionAuditEntry(
+                    section.heading,
+                    section.heading_level,
+                    ("head",),
                 )
             )
         else:
@@ -449,6 +460,8 @@ def _fit_agents_index(content: str, audit: AgentsSelectionAudit) -> AgentsSelect
     if _aggregate_agents_bytes(content, audit) <= AGENTS_LIMIT_BYTES:
         return audit
     entries = audit.indexed_only_sections
+    if not entries:
+        raise RuntimeError("AGENTS head and selection audit exceed the AGENTS budget")
     without_index = replace(audit, indexed_only_sections=(), index_truncated=True)
     without_index_bytes = _aggregate_agents_bytes(content, without_index)
     fixed_bytes = without_index_bytes - len(_AUDIT_EMPTY_LIST_LINE.encode("utf-8")) - 1
@@ -511,12 +524,17 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         return source
     source = _without_byte_order_mark(source)
     try:
-        sections = _parse_markdown_sections(source.content)
+        sections = _parse_markdown_sections(
+            source.content, allow_unclosed_eof_fence=source.truncated
+        )
     except MarkdownSectionParseError:
         return _bounded_head_fallback(source, parse_fallback=True)
 
     head_end = _small_head_end(source.content, sections)
     selected_indices = {index for index, section in enumerate(sections) if section.end <= head_end}
+    partial_head_index = (
+        0 if (sections and 0 not in selected_indices and sections[0].start < head_end) else None
+    )
     reasons: dict[int, set[str]] = {index: {"head"} for index in selected_indices}
     ranked: list[tuple[int, int, frozenset[str]]] = []
     for index, section in enumerate(sections):
@@ -544,6 +562,9 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         + 1
         for s in sections
     ]
+    initially_listed = set(selected_indices)
+    if partial_head_index is not None:
+        initially_listed.add(partial_head_index)
     selected_sizes = {
         index: len(
             _audit_selected_line(
@@ -553,7 +574,7 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
             ).encode("utf-8")
         )
         + 1
-        for index in selected_indices
+        for index in initially_listed
     }
     selected_lines = sum(selected_sizes.values())
     document_head_end = sections[0].start if sections else len(source.content)
@@ -568,11 +589,13 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         )
     content_bytes = len(source.content[:head_end].encode("utf-8"))
     chars_selected = head_end
-    index_count = len(sections) - len(selected_indices)
+    index_count = len(sections) - len(initially_listed)
     index_lines = sum(
-        size for index, size in enumerate(index_sizes) if index not in selected_indices
+        size for index, size in enumerate(index_sizes) if index not in initially_listed
     )
-    first_index = len(selected_indices)
+    first_index = 0
+    while first_index < len(sections) and first_index in initially_listed:
+        first_index += 1
     placeholder_bytes = len(_AUDIT_EMPTY_LIST_LINE.encode("utf-8")) + 1
     no_index_bytes = len(_AUDIT_NO_INDEX_LINE.encode("utf-8")) + 1
     empty_sizes = {
@@ -608,10 +631,11 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         if selected_line_bytes:
             common += selected_line_bytes - placeholder_bytes
         full = common + empty_sizes[truncated, False]
-        if remaining_count:
-            full += remaining_lines - placeholder_bytes
-            if truncated:
-                full -= no_index_bytes
+        if not remaining_count:
+            return full
+        full += remaining_lines - placeholder_bytes
+        if truncated:
+            full -= no_index_bytes
         fitted = common + empty_sizes[truncated, True]
         if remaining_count > 1:
             # A very short first index line can cost less than the empty placeholder.
@@ -625,7 +649,10 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         while parent is not None:
             trial_reasons[parent] = reasons.get(parent, set()) | {"parent_context"}
             parent = sections[parent].parent_index
+        if partial_head_index is not None and partial_head_index in trial_reasons:
+            trial_reasons[partial_head_index].add("head")
         new_indices = trial_reasons.keys() - selected_indices
+        newly_removed_from_index = {item for item in new_indices if item != partial_head_index}
         trial_bytes = content_bytes + sum(extra_bytes[item] for item in new_indices)
         trial_chars = chars_selected + sum(
             sections[item].end - max(head_end, sections[item].start) for item in new_indices
@@ -646,11 +673,15 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         trial_selected_lines = selected_lines + sum(
             size - selected_sizes.get(item, 0) for item, size in trial_sizes.items()
         )
-        trial_index_count = index_count - len(new_indices)
-        trial_index_lines = index_lines - sum(index_sizes[item] for item in new_indices)
+        trial_index_count = index_count - len(newly_removed_from_index)
+        trial_index_lines = index_lines - sum(
+            index_sizes[item] for item in newly_removed_from_index
+        )
         trial_first = first_index
         while trial_first < len(sections) and (
-            trial_first in selected_indices or trial_first in new_indices
+            trial_first in selected_indices
+            or trial_first in new_indices
+            or trial_first == partial_head_index
         ):
             trial_first += 1
         if (
@@ -684,6 +715,7 @@ def _select_agents_content(source: CollectedFile, signals: _SelectionSignals) ->
         frozenset(selected_indices),
         reasons,
         frozenset(budget_fallback),
+        partial_head_index=partial_head_index,
         parse_fallback=False,
         source_scan_truncated=source.truncated,
         source_characters=source.source_characters,

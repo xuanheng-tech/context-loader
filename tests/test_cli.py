@@ -136,9 +136,9 @@ def test_version_output_and_packaging_metadata_are_consistent() -> None:
     module_name, attribute = entry_point.split(":", 1)
 
     assert result.returncode == 0
-    assert result.stdout == b"project-context 1.3.10\n"
+    assert result.stdout == b"project-context 1.4.0\n"
     assert result.stderr == b""
-    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.3.10"
+    assert project["project"]["version"] == lock_package["version"] == __version__ == "1.4.0"
     assert entry_point == "context_loader.cli:main"
     assert getattr(import_module(module_name), attribute) is main
     assert (PROJECT_ROOT / "project-context").read_text(encoding="utf-8") == (
@@ -226,20 +226,20 @@ def test_optional_focus_and_path_select_late_agents_section_without_breaking_leg
         "# Demo\n\n## Core\ncore\n\n"
         "## Unrelated Commands\n"
         + ("build lint command\n" * 500)
-        + "\n## JoinQuant Provider Runtime\nLATE_RUNTIME_GATE\n",
+        + "\n## Vendor Adapter Runtime\nLATE_RUNTIME_GATE\n",
         encoding="utf-8",
     )
 
     legacy = _run(repo)
     focused = _run(
         repo,
-        focus="JoinQuant provider runtime",
-        path="scripts/joinquant/provider_probe.py",
+        focus="Vendor adapter runtime",
+        path="scripts/vendor_cloud/adapter_probe.py",
     )
 
     assert legacy.returncode == focused.returncode == 0
     assert "LATE_RUNTIME_GATE" not in legacy.stdout.decode("utf-8")
-    assert "H2 JoinQuant Provider Runtime" in legacy.stdout.decode("utf-8")
+    assert "H2 Vendor Adapter Runtime" in legacy.stdout.decode("utf-8")
     assert "LATE_RUNTIME_GATE" in focused.stdout.decode("utf-8")
     assert "focus_match" in focused.stdout.decode("utf-8")
 
@@ -768,30 +768,21 @@ def test_entry_file_content_has_per_file_and_aggregate_limits(tmp_path: Path) ->
         assert "… truncated by context-loader …" in subsection.split("### `", 1)[0]
 
 
-def test_global_output_limit_omits_late_sections_without_invalid_utf8(tmp_path: Path) -> None:
+def test_global_output_limit_omits_late_sections_without_invalid_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    from context_loader import render
+
     repo = _repository(tmp_path)
-    (repo / "tracked.txt").write_text("large subject\n", encoding="utf-8")
-    _git(repo, "add", "tracked.txt")
-    huge_subject = "s" * 110_000
-    _git(
-        repo,
-        "-c",
-        "user.name=Context Test",
-        "-c",
-        "user.email=context-test@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "-m",
-        huge_subject,
-    )
+    (repo / "AGENTS.md").write_text("# Instructions\n" + ("a" * 3_900) + "\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Overview\n" + ("r" * 15_000) + "\n", encoding="utf-8")
+    monkeypatch.setattr(render, "GLOBAL_OUTPUT_LIMIT_BYTES", 8_192)
 
-    result = _run(repo)
+    assert main(["--repo", os.fspath(repo)]) == 0
+    captured = capsysbinary.readouterr()
 
-    assert result.returncode == 0
-    assert len(result.stdout) <= 98_304
-    output = result.stdout.decode("utf-8")
+    assert len(captured.out) <= 8_192
+    output = captured.out.decode("utf-8")
     assert "## Recent Commits\n\nOmitted: global output limit reached." in output
     assert "## Directory Tree\n\nOmitted: global output limit reached." in output
 
@@ -909,7 +900,8 @@ def test_duplicate_single_value_options_are_rejected_without_collecting(
     assert cli.main(["--repo", "/unused", flag, value, f"{flag}={value}"]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "error: invalid command-line arguments\n"
+    assert captured.err == "error: invalid command-line arguments: option supplied more than once\n"
+    assert "/private/argument" not in captured.err
 
 
 def test_declared_commands_have_an_eight_kibibyte_limit(tmp_path: Path) -> None:
@@ -1190,7 +1182,7 @@ def test_oversized_repository_file_stat_fails_closed(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo = _repository(tmp_path)
-    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 1024)
+    monkeypatch.setattr("context_loader.filesystem.FILE_SCAN_LIMIT_BYTES", 1024)
     (repo / "README.md").write_text("A" * 2048, encoding="utf-8")
 
     exit_code = main(["--repo", os.fspath(repo)])
@@ -1226,7 +1218,7 @@ def test_oversized_repository_file_in_json_is_omitted_from_sources(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo = _repository(tmp_path)
-    monkeypatch.setattr("context_loader.collect.FILE_SCAN_LIMIT_BYTES", 512)
+    monkeypatch.setattr("context_loader.filesystem.FILE_SCAN_LIMIT_BYTES", 512)
     (repo / "AGENTS.md").write_text("# Instructions\n" + ("x" * 1024), encoding="utf-8")
 
     exit_code = main(["--repo", os.fspath(repo), "--format", "json"])
@@ -1235,7 +1227,7 @@ def test_oversized_repository_file_in_json_is_omitted_from_sources(
     assert exit_code == 0
     document = json.loads(captured.out)
     assert document["tool"]["name"] == "context-loader"
-    assert document["tool"]["version"] == "1.3.10"
+    assert document["tool"]["version"] == "1.4.0"
     assert not any(source["kind"] == "agents" for source in document["sources"])
     assert "Skipped: unreadable." in document["context"]
 

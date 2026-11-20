@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import selectors
+import signal
 import subprocess
 import time
 from bisect import bisect_right
@@ -16,8 +18,10 @@ from types import MappingProxyType
 from .model import MAX_CHANGE_ENTRIES
 
 GIT_EXECUTABLE = "/usr/bin/git"
+_FALLBACK_GIT_EXECUTABLES = ("/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git")
 GIT_TIMEOUT_SECONDS = 30
 MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_GIT_INDEX_SCAN_BYTES = 256 * 1024 * 1024
 MAX_RECENT_COMMITS = 8
 MAX_STATUS_REPOSITORIES = 128
 
@@ -61,12 +65,36 @@ _GIT_ENVIRONMENT = MappingProxyType(
         "HOME": "/nonexistent",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
-        "PATH": "/usr/bin:/bin",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         "PAGER": "cat",
         "TERM": "dumb",
         "XDG_CONFIG_HOME": "/nonexistent",
     }
 )
+
+
+def _resolve_git_executable() -> str:
+    if GIT_EXECUTABLE != "/usr/bin/git" or Path(GIT_EXECUTABLE).exists():
+        return GIT_EXECUTABLE
+    for candidate in _FALLBACK_GIT_EXECUTABLES:
+        if Path(candidate).is_file():
+            return candidate
+    return GIT_EXECUTABLE
+
+
+def _kill_process_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Terminate the child process group if isolated, otherwise only the child itself."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        pgid = -1
+    if pgid == proc.pid:
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(OSError):
+        proc.wait()
 
 
 class ContextLoaderError(Exception):
@@ -139,13 +167,11 @@ def _read_bounded_process_stdout(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                proc.kill()
-                proc.wait()
+                _kill_process_tree(proc)
                 raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
             events = selector.select(timeout=max(0.0, remaining))
             if not events:
-                proc.kill()
-                proc.wait()
+                _kill_process_tree(proc)
                 raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
             try:
                 chunk = os.read(proc.stdout.fileno(), 64 * 1024)
@@ -155,19 +181,14 @@ def _read_bounded_process_stdout(
                 break
             total_bytes += len(chunk)
             if total_bytes > max_bytes:
-                proc.kill()
-                proc.wait()
+                _kill_process_tree(proc)
                 raise ContextLoaderError("repository Git output exceeded the safety limit")
             if consume is None:
                 buffer.extend(chunk)
             else:
                 consume(chunk)
-    except Exception:
-        try:
-            proc.kill()
-            proc.wait()
-        except OSError:
-            pass
+    except BaseException:
+        _kill_process_tree(proc)
         raise
     finally:
         selector.close()
@@ -176,8 +197,7 @@ def _read_bounded_process_stdout(
     try:
         proc.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        _kill_process_tree(proc)
         raise
     return bytes(buffer)
 
@@ -194,10 +214,11 @@ def _run_git(
     check: bool = True,
     deadline: float | None = None,
     consume: Callable[[bytes], None] | None = None,
+    max_bytes: int | None = None,
 ) -> GitResult:
     command_deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
     deadline = command_deadline if deadline is None else min(deadline, command_deadline)
-    argv = [GIT_EXECUTABLE, *_GIT_PREFIX, "-C", os.fspath(repo), *arguments]
+    argv = [_resolve_git_executable(), *_GIT_PREFIX, "-C", os.fspath(repo), *arguments]
     try:
         _check_git_deadline(deadline)
         with subprocess.Popen(  # noqa: S603 - executable and every command are fixed here.
@@ -207,10 +228,11 @@ def _run_git(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         ) as proc:
             stdout = _read_bounded_process_stdout(
                 proc,
-                MAX_GIT_OUTPUT_BYTES,
+                MAX_GIT_OUTPUT_BYTES if max_bytes is None else max_bytes,
                 GIT_TIMEOUT_SECONDS,
                 deadline=deadline,
                 consume=consume,
@@ -271,29 +293,26 @@ def _discover_repository(
         check=False,
         deadline=deadline,
     )
+    invalid_message = (
+        "--repo must be the canonical root of a non-bare Git worktree"
+        if require_canonical_root
+        else "--repo must name a directory inside a non-bare Git worktree"
+    )
     # Only the first line is metadata; a literal repository path may contain newlines.
     bare, separator, root = location.stdout.partition(b"\n")
     if location.returncode != 0 or bare != b"false" or not separator or not root:
-        raise ContextLoaderError(
-            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
-        )
+        raise ContextLoaderError(invalid_message, exit_code=2)
     try:
         discovered = Path(_decode_path(_without_one_line_ending(root))).resolve(strict=True)
     except (OSError, RuntimeError):
-        raise ContextLoaderError(
-            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
-        ) from None
+        raise ContextLoaderError(invalid_message, exit_code=2) from None
+    # Reject core.worktree / config redirects that point outside the discovered worktree root.
+    if not canonical.is_relative_to(discovered):
+        raise ContextLoaderError(invalid_message, exit_code=2)
     if require_canonical_root and discovered != canonical:
-        raise ContextLoaderError(
-            "--repo must be the canonical root of a non-bare Git worktree", exit_code=2
-        )
+        raise ContextLoaderError(invalid_message, exit_code=2)
     _check_git_deadline(deadline)
     return RepositoryLocation(requested_path=canonical, canonical_root=discovered)
-
-
-def validate_repository(raw_path: str | os.PathLike[str]) -> Path:
-    """Return the canonical root of an explicitly supplied Git worktree root."""
-    return discover_repository(raw_path, require_canonical_root=True).canonical_root
 
 
 def _head_and_branch(repo: Path, deadline: float) -> tuple[str, str, str | None]:
@@ -357,7 +376,7 @@ def _upstream_state(repo: Path, branch_name: str | None, deadline: float) -> tup
         raise ContextLoaderError("unable to read repository Git state")
     divergence = _run_git(
         repo,
-        ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"),
+        ("rev-list", "--left-right", "--count", "HEAD...@{upstream}", "--"),
         check=False,
         deadline=deadline,
     )
@@ -367,6 +386,43 @@ def _upstream_state(repo: Path, branch_name: str | None, deadline: float) -> tup
     if len(counts) != 2 or any(not count.isdigit() for count in counts):
         return upstream, "not available"
     return upstream, f"{counts[0].decode('ascii')} / {counts[1].decode('ascii')}"
+
+
+def _submodule_children(repo: Path, deadline: float) -> set[Path]:
+    children: set[Path] = set()
+    pending_index = bytearray()
+
+    def consume_index(chunk: bytes) -> None:
+        pending_index.extend(chunk)
+        start = 0
+        while (end := pending_index.find(b"\0", start)) >= 0:
+            record = bytes(pending_index[start:end])
+            start = end + 1
+            if not record:
+                continue
+            metadata, separator, raw_path = record.partition(b"\t")
+            if metadata.split(b" ", 1)[0] != b"160000":
+                continue
+            if not separator or not raw_path:
+                raise ContextLoaderError("unable to parse repository submodule state")
+            path = Path(_decode_path(raw_path))
+            if path.is_absolute() or ".." in path.parts:
+                raise ContextLoaderError("unable to safely inspect repository submodule state")
+            child = repo / path
+            if (child / ".git").exists():
+                children.add(child)
+        del pending_index[:start]
+
+    _run_git(
+        repo,
+        ("ls-files", "--stage", "-z"),
+        deadline=deadline,
+        consume=consume_index,
+        max_bytes=MAX_GIT_INDEX_SCAN_BYTES,
+    )
+    if pending_index:
+        raise ContextLoaderError("unable to parse repository submodule state")
+    return children
 
 
 def _ensure_safe_status(repo: Path, deadline: float) -> None:
@@ -408,20 +464,7 @@ def _ensure_safe_status(repo: Path, deadline: float) -> None:
                 "repository or submodule config enables Git clean/process filters; "
                 "unable to safely inspect working-tree state"
             )
-        index = _run_git(current, ("ls-files", "--stage", "-z"), deadline=deadline)
-        children: set[Path] = set()
-        for record in index.stdout.split(b"\0"):
-            metadata, separator, raw_path = record.partition(b"\t")
-            if metadata.split(b" ", 1)[0] != b"160000":
-                continue
-            if not separator or not raw_path:
-                raise ContextLoaderError("unable to parse repository submodule state")
-            path = Path(_decode_path(raw_path))
-            if path.is_absolute() or ".." in path.parts:
-                raise ContextLoaderError("unable to safely inspect repository submodule state")
-            child = current / path
-            if (child / ".git").exists():
-                children.add(child)
+        children = _submodule_children(current, deadline)
         pending.extend(sorted(children))
         if len(seen) + len(pending) > MAX_STATUS_REPOSITORIES:
             raise ContextLoaderError("repository submodule inspection exceeded the safety limit")
@@ -488,6 +531,7 @@ def _recent_commits(repo: Path, head: str, deadline: float) -> tuple[RecentCommi
         repo,
         (
             "log",
+            "-z",
             f"--max-count={MAX_RECENT_COMMITS}",
             "--no-decorate",
             "--format=%H%x09%aI%x09%s",
@@ -497,8 +541,10 @@ def _recent_commits(repo: Path, head: str, deadline: float) -> tuple[RecentCommi
         deadline=deadline,
     )
     commits: list[RecentCommit] = []
-    for line in result.stdout.splitlines():
-        fields = line.split(b"\t", 2)
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        fields = record.split(b"\t", 2)
         if len(fields) != 3:
             raise ContextLoaderError("unable to parse repository Git state")
         object_id = _decode_text(fields[0])

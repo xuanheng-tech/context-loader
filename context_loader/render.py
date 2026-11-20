@@ -18,6 +18,8 @@ from .model import (
     ENTRY_FILES_TOTAL_LIMIT_BYTES,
     MAX_CHANGE_ENTRIES,
     README_LIMIT_BYTES,
+    RECENT_COMMIT_SUBJECT_LIMIT_BYTES,
+    RECENT_COMMITS_LIMIT_BYTES,
     TRUNCATION_MARKER,
     Availability,
     CollectedFile,
@@ -31,6 +33,7 @@ SCHEMA = "context-loader/v0.1"
 GLOBAL_OUTPUT_LIMIT_BYTES = 98_304
 MAX_CHANGE_MARKDOWN_BYTES = 4 * 1024
 GLOBAL_OMISSION = "Omitted: global output limit reached."
+VALID_LAYOUTS = frozenset({"default", "cache-friendly"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,17 +79,27 @@ def _unavailable_sentence(reason: Availability) -> str:
     raise AssertionError(f"no display sentence for source reason {reason!r}")
 
 
-def _display_limited(value: str, limit: int) -> str | None:
+def _display_prefix(value: str, limit: int) -> tuple[str, bool]:
+    """Encode ``display_text(value)`` within ``limit`` UTF-8 bytes, appending ``…`` when cut."""
     rendered: list[str] = []
     used = 0
     for character in value:
         piece = display_text(character)
         size = len(piece.encode())
         if used + size > limit:
-            return None
+            ellipsis = "…"
+            ellipsis_bytes = len(ellipsis.encode("utf-8"))
+            if limit < ellipsis_bytes:
+                return "", True
+            while rendered and used + ellipsis_bytes > limit:
+                removed = rendered.pop()
+                used -= len(removed.encode())
+            if used + ellipsis_bytes <= limit:
+                rendered.append(ellipsis)
+            return "".join(rendered), True
         rendered.append(piece)
         used += size
-    return "".join(rendered)
+    return "".join(rendered), False
 
 
 def _truncate_at_line_boundary(content: str, limit: int) -> tuple[str, bool]:
@@ -147,7 +160,7 @@ def _change_lines(state: RepositoryState) -> tuple[list[str], bool]:
     return lines, state.changes_truncated
 
 
-def _render_git_state(state: RepositoryState) -> str:
+def _render_git_state(state: RepositoryState) -> tuple[str, bool]:
     lines = [
         "## Git State",
         "",
@@ -167,7 +180,7 @@ def _render_git_state(state: RepositoryState) -> str:
         lines.append("No changes.")
     if truncated:
         lines.append("- Additional changes omitted by the 100-entry / 4-KiB limit.")
-    return "\n".join(lines)
+    return "\n".join(lines), truncated
 
 
 def _render_source_section(
@@ -270,28 +283,20 @@ def _render_entry_files(
     return "\n".join(parts)
 
 
-def _render_recent_commits(commits: tuple[RecentCommit, ...]) -> str | None:
-    lines = ["## Recent Commits", ""]
+def _render_recent_commits(commits: tuple[RecentCommit, ...]) -> str:
+    header = "## Recent Commits\n\n"
     if not commits:
-        lines.append("No commits.")
-        return "\n".join(lines)
-    used = len(b"## Recent Commits\n\n")
+        return f"{header}No commits."
+    lines: list[str] = []
     for commit in commits:
-        prefix = f"- `{commit.object_id[:12]}` · "
-        date = _display_limited(commit.author_date, GLOBAL_OUTPUT_LIMIT_BYTES)
-        if date is None:
-            return None
-        prefix = f"{prefix}{date} · "
-        remaining = GLOBAL_OUTPUT_LIMIT_BYTES - used - len(prefix.encode()) - 1
-        subject = _display_limited(commit.subject, max(0, remaining))
-        if subject is None:
-            return None
-        line = f"{prefix}{subject}"
-        used += len(line.encode()) + 1
-        if used > GLOBAL_OUTPUT_LIMIT_BYTES:
-            return None
-        lines.append(line)
-    return "\n".join(lines)
+        prefix_head = f"- `{commit.object_id[:12]}` · "
+        date, _ = _display_prefix(commit.author_date, 128)
+        prefix = f"{prefix_head}{date} · "
+        subject, _ = _display_prefix(commit.subject, RECENT_COMMIT_SUBJECT_LIMIT_BYTES)
+        lines.append(f"{prefix}{subject}")
+    body_budget = max(0, RECENT_COMMITS_LIMIT_BYTES - len(header.encode("utf-8")))
+    body, _ = _bounded_lines(lines, body_budget)
+    return f"{header}{body}"
 
 
 def _tree_line(entry: TreeEntry) -> str:
@@ -369,8 +374,12 @@ def _omitted_section(title: str) -> str:
     return f"## {title}\n\n{GLOBAL_OMISSION}"
 
 
-def render_markdown_with_details(state: RepositoryState, project: ProjectContext) -> MarkdownRender:
+def render_markdown_with_details(
+    state: RepositoryState, project: ProjectContext, *, layout: str = "default"
+) -> MarkdownRender:
     """Render all sections in fixed order without exceeding the global byte limit."""
+    if layout not in VALID_LAYOUTS:
+        raise ValueError(f"unsupported layout: {layout!r}")
     header = "\n".join(
         (
             "# Project Context",
@@ -379,32 +388,48 @@ def render_markdown_with_details(state: RepositoryState, project: ProjectContext
             f"- Repository: `{display_text(os.fspath(state.repository))}`",
         )
     )
+    git_state_section, changes_truncated = _render_git_state(state)
     commands_section, commands_truncated = _render_commands(project.commands)
-    changes_truncated = _change_lines(state)[1]
     tree_section, tree_truncated = _render_directory_tree(project.directory_tree)
     all_bodies = _source_bodies(project)
     bodies = {body.source.name: body for body in all_bodies}
-    sections: list[tuple[str, str | None]] = [
-        ("Git State", _render_git_state(state)),
+    named_sections: dict[str, str | None] = {
+        "Git State": git_state_section,
+        "Development Instructions": _render_source_section(
+            "Development Instructions",
+            project.instructions,
+            bodies.get(project.instructions.name),
+        ),
+        "Project Overview": _render_source_section(
+            "Project Overview", project.overview, bodies.get(project.overview.name)
+        ),
+        "Declared Commands": commands_section,
+        "Project Entry Files": _render_entry_files(project.entry_files, bodies),
+        "Recent Commits": _render_recent_commits(state.commits),
+        "Directory Tree": tree_section,
+    }
+    order = (
         (
             "Development Instructions",
-            _render_source_section(
-                "Development Instructions",
-                project.instructions,
-                bodies.get(project.instructions.name),
-            ),
-        ),
-        (
             "Project Overview",
-            _render_source_section(
-                "Project Overview", project.overview, bodies.get(project.overview.name)
-            ),
-        ),
-        ("Declared Commands", commands_section),
-        ("Project Entry Files", _render_entry_files(project.entry_files, bodies)),
-        ("Recent Commits", _render_recent_commits(state.commits)),
-        ("Directory Tree", tree_section),
-    ]
+            "Declared Commands",
+            "Project Entry Files",
+            "Directory Tree",
+            "Git State",
+            "Recent Commits",
+        )
+        if layout == "cache-friendly"
+        else (
+            "Git State",
+            "Development Instructions",
+            "Project Overview",
+            "Declared Commands",
+            "Project Entry Files",
+            "Recent Commits",
+            "Directory Tree",
+        )
+    )
+    sections: list[tuple[str, str | None]] = [(title, named_sections[title]) for title in order]
 
     rendered_parts = [header.encode()]
     included_sections: list[str] = []
@@ -477,13 +502,8 @@ def _included_source_bodies(
     )
 
 
-def rendered_source_contents(
-    project: ProjectContext, included_sections: tuple[str, ...]
-) -> tuple[RenderedSourceBody, ...]:
-    """Return source-file bodies under the same budgets used by the Markdown renderer."""
-    return _included_source_bodies(_source_bodies(project), included_sections)
-
-
-def render_markdown(state: RepositoryState, project: ProjectContext) -> bytes:
+def render_markdown(
+    state: RepositoryState, project: ProjectContext, *, layout: str = "default"
+) -> bytes:
     """Render all sections in fixed order without exceeding the global byte limit."""
-    return render_markdown_with_details(state, project).output
+    return render_markdown_with_details(state, project, layout=layout).output

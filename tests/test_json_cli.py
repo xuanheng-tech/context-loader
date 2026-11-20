@@ -134,7 +134,7 @@ def test_json_contract_sources_and_hashes_are_stable(tmp_path: Path) -> None:
     assert result.stderr == b""
     document = json.loads(result.stdout)
     assert document["schema_version"] == 3
-    assert document["tool"] == {"name": "context-loader", "version": "1.3.10"}
+    assert document["tool"] == {"name": "context-loader", "version": "1.4.0"}
     assert document["repository"] == {
         "requested_path": os.fspath(repo.resolve()),
         "canonical_root": os.fspath(repo.resolve()),
@@ -454,30 +454,19 @@ def test_json_statuses_expose_truncated_source(tmp_path: Path) -> None:
     assert "… truncated by context-loader …" in document["context"]
 
 
-def test_json_statuses_expose_globally_omitted_sections(tmp_path: Path) -> None:
+def test_json_statuses_expose_globally_omitted_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from context_loader import render
+    from context_loader.cli import main
+
     repo = _repository(tmp_path)
-    (repo / "README.md").write_text("# Overview\n", encoding="utf-8")
-    (repo / "tracked.txt").write_text("large subject\n", encoding="utf-8")
-    _git(repo, "add", "tracked.txt")
-    huge_subject = "s" * 110_000
-    _git(
-        repo,
-        "-c",
-        "user.name=Context Test",
-        "-c",
-        "user.email=context-test@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "-m",
-        huge_subject,
-    )
+    (repo / "AGENTS.md").write_text("# Instructions\n" + ("a" * 3_900) + "\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Overview\n" + ("r" * 15_000) + "\n", encoding="utf-8")
+    monkeypatch.setattr(render, "GLOBAL_OUTPUT_LIMIT_BYTES", 8_192)
 
-    result = _run(repo, output_format="json")
-
-    assert result.returncode == 0
-    document = json.loads(result.stdout)
+    assert main(["--repo", os.fspath(repo), "--format", "json"]) == 0
+    document = json.loads(capsys.readouterr().out)
     assert document["warnings"] == []
     omitted = [
         status
@@ -623,11 +612,11 @@ def test_json_compact_focus_selection_flows_into_both_documents(tmp_path: Path) 
         "# Demo\n\n## Core\ncore\n\n"
         "## Unrelated Commands\n"
         + ("build lint command\n" * 500)
-        + "\n## JoinQuant Provider Runtime\nLATE_RUNTIME_GATE\n",
+        + "\n## Vendor Adapter Runtime\nLATE_RUNTIME_GATE\n",
         encoding="utf-8",
     )
-    focus = "JoinQuant provider runtime"
-    target_path = "runtime/provider_probe.py"
+    focus = "Vendor adapter runtime"
+    target_path = "runtime/adapter_probe.py"
 
     unfocused_json = _run(repo, output_format="json")
     unfocused = _run(repo, output_format="json-compact")

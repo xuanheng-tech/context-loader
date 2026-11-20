@@ -6,6 +6,27 @@ dates.
 
 ## Unreleased
 
+## 1.4.0 - 2026-11-20
+
+- Enforce worktree-root containment (`is_relative_to`) across `--format json` and
+  `--format json-compact` discovery to block malicious `core.worktree` redirects outside the
+  target tree.
+- Fix `AGENTS.md` selection audit inconsistency when the first H1 section exceeds 4 KiB so the
+  loaded head section is credited under selected sections rather than omitted headings.
+- Fix CommonMark §4.5 fenced code block parsing (rejecting backticks in backtick fence info
+  strings and handling truncated EOF fences), fix `minimum_cost()` empty-index accounting, and
+  escape headings in selection audits through `display_text()`.
+- Decouple command extraction (256 KiB scan budget, BOM stripping, Just `@quiet:`/`$`/`alias`,
+  Make `/` targets and inline `#` comments) from the 8 KiB entry-file display limit.
+- Use NUL-delimited `git log -z`, `--` before `git rev-list`, streamed `git ls-files --stage`
+  submodule preflight, process-group cleanup (`start_new_session=True`), and portable Git/text
+  handling.
+- Add `--layout cache-friendly` to place static sections ahead of dynamic `Git State` and
+  `Recent Commits`, bound `Recent Commits` to 4 KiB independently of `Directory Tree`, exclude
+  common build/cache/dependency directories from `Directory Tree` with early-stop descent, switch
+  nested `AGENTS.md` discovery to breadth-first search, isolate `LC_ALL=C` in `scripts/release.py`,
+  and clean domain stopwords/fixtures.
+
 ## 1.3.10
 
 - Complete the GitHub and Gitea default-branch migration to `main`; remove the temporary

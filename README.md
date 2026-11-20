@@ -8,14 +8,14 @@ Python standard library.
 
 ## Open-source quick start
 
-Current stable release: **1.3.10**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
+Current stable release: **1.4.0**. Local CLI for coding-agent workflows; renders deterministic Markdown or JSON.
 
 ```bash
-uv tool install 'context-loader==1.3.10'
+uv tool install 'context-loader==1.4.0'
 ```
 
 ```bash
-pip install 'context-loader==1.3.10'
+pip install 'context-loader==1.4.0'
 ```
 
 ```bash
@@ -28,21 +28,21 @@ project-context --repo /path/to/repo --format json
 
 ## Install
 
-Source version: `1.3.10`. Install its matching published release or an exact source commit.
+Source version: `1.4.0`. Install its matching published release or an exact source commit.
 
 Install via `uv`:
 
 ```bash
-uv tool install 'context-loader==1.3.10'
+uv tool install 'context-loader==1.4.0'
 ```
 
 Install via `pip`:
 
 ```bash
-pip install 'context-loader==1.3.10'
+pip install 'context-loader==1.4.0'
 ```
 
-For development or source-based installs tracking current repository (`1.3.10`):
+For development or source-based installs tracking current repository (`1.4.0`):
 
 ```bash
 uv tool install git+https://github.com/xuanheng-tech/context-loader.git
@@ -69,10 +69,10 @@ part of either distribution; run them from a checkout of the matching tag.
 ## Platform and Runtime Requirements
 
 - **Python**: Python 3.12–3.14 (`>=3.12,<3.15`). Runtime code uses only the Python standard library with zero runtime dependencies.
-- **Git**: Requires the standard `git` CLI at the fixed absolute path `/usr/bin/git`. The
-  executable is never resolved through `PATH`, so an installation elsewhere is not used and
-  every invocation fails with exit `1`. Git runs with a sanitized environment that ignores
-  system, global and per-command configuration, attributes, and hooks.
+- **Git**: Requires the standard `git` CLI at `/usr/bin/git` (with fallback to `/opt/homebrew/bin/git`
+  or `/usr/local/bin/git` when `/usr/bin/git` is absent). The executable is never resolved through
+  ambient `PATH`. Git runs with a sanitized environment that ignores system, global and per-command
+  configuration, attributes, and hooks.
 - **Operating System**: supported and locally tested on Ubuntu 24.04 LTS; CI also tests the
   GitHub-hosted Ubuntu runner. Other Linux/POSIX systems are unverified, not a portability promise.
   Windows is not supported.
@@ -92,6 +92,7 @@ automatic redaction**. Inspect the output before sharing it with a person or ext
 project-context --version
 project-context --repo /home/user/projects/example
 project-context --repo /home/user/projects/example --format markdown
+project-context --repo /home/user/projects/example --format markdown --layout cache-friendly
 project-context --repo /home/user/projects/example --format json
 project-context --repo /home/user/projects/example --format json-compact
 project-context --repo /home/user/projects/example \
@@ -99,17 +100,21 @@ project-context --repo /home/user/projects/example \
   --path auth/session.py
 ```
 
-`--format` defaults to `markdown`. In Markdown mode, `--repo` retains the 0.1.1 contract: it must be
-the absolute, canonical root of a non-bare Git working tree. In the `json` and `json-compact` modes,
-an absolute existing directory inside the working tree is accepted; symlinks are normalized and the
-discovered root is reported as `canonical_root`. Relative paths, non-Git directories, regular files,
-and bare repositories are rejected in every mode.
+`--format` defaults to `markdown`. `--layout` defaults to `default` (fixed section order starting
+with `Git State`); `--layout cache-friendly` places stable static sections (`Development
+Instructions`, `Project Overview`, `Declared Commands`, `Project Entry Files`, `Directory Tree`)
+before dynamic `Git State` and `Recent Commits` to preserve prompt prefix caching across edits.
+In Markdown mode, `--repo` retains the 0.1.1 contract: it must be the absolute, canonical root of
+a non-bare Git working tree. In the `json` and `json-compact` modes, an absolute existing directory
+inside the working tree is accepted (enforcing worktree-root containment against `core.worktree`
+escapes); symlinks are normalized and the discovered root is reported as `canonical_root`. Relative
+paths, non-Git directories, regular files, and bare repositories are rejected in every mode.
 
 `--focus` and `--path` are optional, bounded selection signals for the root `AGENTS.md`. `--path`
 must be repository-relative. The collector does not retain either input in output or audit data.
 Calls that omit both options remain valid and use the conservative fallback described in
 [Supported Root Files](https://github.com/xuanheng-tech/context-loader/blob/HEAD/docs/reference.md#supported-root-files).
-Each value option (`--repo`, `--focus`, `--path`, `--format`) may be supplied once;
+Each value option (`--repo`, `--focus`, `--path`, `--format`, `--layout`) may be supplied once;
 duplicates are rejected before collection rather than silently overriding an earlier value.
 
 ## Markdown Output
@@ -139,8 +144,9 @@ the machine formats; this does not change Markdown content or its byte budgets.
 ## Authority Boundary
 
 Context Loader is a bounded transport for repository-root context, not the authority for a
-repository's instruction hierarchy. It reads the fixed root candidates listed below, renders them
-under explicit limits, and stops there.
+repository's instruction hierarchy. It reads the fixed root candidates listed in
+[Supported Root Files](https://github.com/xuanheng-tech/context-loader/blob/HEAD/docs/reference.md#supported-root-files),
+renders them under explicit limits, and stops there.
 
 Resolving an instruction hierarchy stays with the calling agent harness. That includes any
 shared or user-level instruction file outside the repository, nested or scoped `AGENTS.md` files
@@ -169,7 +175,7 @@ or candidate-file content.
 
 ## Not Included
 
-Version 1.3.10 does not provide AI summaries, project-type detection, loading or transport of
+Version 1.4.0 does not provide AI summaries, project-type detection, loading or transport of
 nested `AGENTS.md` contents (the JSON `nested_context` field reports bounded existence only),
 Memory retrieval, semantic ranking, ignore-rule parsing, plugins, profiles, caches, databases,
 network services, MCP, daemons, GUIs, CI/CD, telemetry, or automatic updates.

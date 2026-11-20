@@ -13,8 +13,21 @@ from .git import ContextLoaderError
 
 class SafeArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
-        del message
-        raise ContextLoaderError("invalid command-line arguments", exit_code=2)
+        # Categorize failures using static messages without echoing caller tokens or paths.
+        lowered = message.lower()
+        if "option supplied more than once" in lowered:
+            reason = "invalid command-line arguments: option supplied more than once"
+        elif "the following arguments are required" in lowered:
+            reason = "invalid command-line arguments: missing required option"
+        elif "unrecognized arguments" in lowered:
+            reason = "invalid command-line arguments: unrecognized argument"
+        elif "invalid choice" in lowered:
+            reason = "invalid command-line arguments: invalid option value"
+        elif "expected one argument" in lowered:
+            reason = "invalid command-line arguments: option requires a value"
+        else:
+            reason = "invalid command-line arguments"
+        raise ContextLoaderError(reason, exit_code=2)
 
 
 class _OnceAction(argparse.Action):
@@ -60,7 +73,17 @@ def _parser() -> argparse.ArgumentParser:
         action=_OnceAction,
         help=(
             "output format (default: markdown); json-compact omits the "
-            "duplicated source bodies (see README, Compact model consumption)"
+            "duplicated source bodies (see docs/reference.md, Compact model consumption)"
+        ),
+    )
+    parser.add_argument(
+        "--layout",
+        choices=("default", "cache-friendly"),
+        default="default",
+        action=_OnceAction,
+        help=(
+            "section order in rendered context (default: default); "
+            "cache-friendly places stable static sections before dynamic Git state"
         ),
     )
     return parser
@@ -75,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             focus=arguments.focus,
             path=arguments.target_path,
             include_nested_context=arguments.format != "markdown",
+            layout=arguments.layout,
         )
         if arguments.format == "markdown":
             output = result.context.encode("utf-8")

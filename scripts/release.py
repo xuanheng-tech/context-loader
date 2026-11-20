@@ -109,6 +109,7 @@ def command(*args: str) -> str:
         and args[3] == f"https://github.com/{PUBLIC_REPOSITORY}.git"
     )
     attempts = PUBLIC_GIT_ATTEMPTS if public_read else 1
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"} if args[0] == "git" else None
     for attempt in range(attempts):
         try:
             result = subprocess.run(
@@ -116,6 +117,7 @@ def command(*args: str) -> str:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=env,
                 timeout=PUBLIC_GIT_TIMEOUT_SECONDS if public_read else None,
             )
         except subprocess.TimeoutExpired:

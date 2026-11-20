@@ -16,7 +16,6 @@ import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from heapq import nsmallest
-from pathlib import Path
 
 from .model import DIRECTORY_NAME_SCAN_LIMIT_ENTRIES, FILE_SCAN_LIMIT_BYTES, Availability
 
@@ -145,17 +144,28 @@ def enumerate_directory(directory_descriptor: int, limit: int) -> DirectoryListi
     return DirectoryListing(tuple(_entry_facts(entry) for entry in retained), counter[0] > limit)
 
 
-def open_bounded_regular_file(path: Path) -> tuple[int, Availability]:
+def open_bounded_regular_file(
+    path: str | os.PathLike[str],
+    *,
+    dir_fd: int | None = None,
+) -> tuple[int, Availability]:
     """Open one regular file for bounded reading without following a symlink.
 
     Returns ``(file_descriptor, Availability.PRESENT)`` when the caller may read and
     must close the descriptor, or ``(-1, reason)`` naming the observed condition.
     """
     try:
-        file_descriptor = os.open(path, REGULAR_FILE_OPEN_FLAGS)
+        if dir_fd is None:
+            file_descriptor = os.open(path, REGULAR_FILE_OPEN_FLAGS)
+        else:
+            file_descriptor = os.open(path, REGULAR_FILE_OPEN_FLAGS, dir_fd=dir_fd)
     except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return -1, Availability.NOT_PRESENT
         if exc.errno == errno.ELOOP:
             return -1, Availability.SYMLINK
+        if exc.errno == errno.EISDIR:
+            return -1, Availability.NOT_REGULAR
         return -1, Availability.UNREADABLE
     reason = Availability.PRESENT
     try:
@@ -172,18 +182,6 @@ def open_bounded_regular_file(path: Path) -> tuple[int, Availability]:
     return -1, reason
 
 
-def _append_normalized_character(
-    capture: bytearray,
-    character: str,
-    limit: int,
-) -> bool:
-    encoded = character.encode()
-    if len(capture) + len(encoded) > limit:
-        return False
-    capture.extend(encoded)
-    return True
-
-
 def read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, Availability, int]:
     """Capture a bounded normalized prefix and count the whole normalized source.
 
@@ -192,36 +190,64 @@ def read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, Av
     encoding or read failure) and the character count of the whole normalized source.
     """
     decoder = codecs.getincrementaldecoder("utf-8")("strict")
-    capture = bytearray()
-    last_line_boundary = 0
+    chunks: list[str] = []
+    captured_bytes = 0
+    last_line_boundary_chunks = 0
+    last_line_boundary_tail = ""
     overflow = False
     pending_carriage_return = False
     source_characters = 0
 
-    def append(character: str) -> None:
-        nonlocal last_line_boundary, overflow
-        if overflow:
+    def append_normalized(text: str) -> None:
+        nonlocal captured_bytes, last_line_boundary_chunks, last_line_boundary_tail, overflow
+        if overflow or not text:
             return
-        if not _append_normalized_character(capture, character, limit):
-            overflow = True
+        encoded = text.encode("utf-8")
+        if captured_bytes + len(encoded) <= limit:
+            chunks.append(text)
+            captured_bytes += len(encoded)
+            newline_pos = text.rfind("\n")
+            if newline_pos >= 0:
+                last_line_boundary_chunks = len(chunks) - 1
+                last_line_boundary_tail = text[: newline_pos + 1]
             return
-        if character == "\n":
-            last_line_boundary = len(capture)
+        # Split the single crossing chunk within remaining byte room at a complete line.
+        room = max(0, limit - captured_bytes)
+        overflow = True
+        if room == 0:
+            return
+        # Trim the prefix by slicing encoded UTF-8 cleanly up to `room` bytes.
+        boundary = encoded.rfind(b"\n", 0, room + 1)
+        if boundary >= 0:
+            prefix = encoded[: boundary + 1].decode("utf-8")
+            chunks.append(prefix)
+            captured_bytes += len(prefix.encode("utf-8"))
+            last_line_boundary_chunks = len(chunks) - 1
+            last_line_boundary_tail = prefix
 
     def consume(decoded: str) -> None:
         nonlocal pending_carriage_return, source_characters
-        for character in decoded:
-            if pending_carriage_return:
-                pending_carriage_return = False
-                source_characters += 1
-                append("\n")
-                if character == "\n":
-                    continue
-            if character == "\r":
-                pending_carriage_return = True
-                continue
+        if not decoded:
+            return
+        if pending_carriage_return:
+            pending_carriage_return = False
+            if decoded.startswith("\n"):
+                decoded = decoded[1:]
+                normalized_prefix = "\n"
+            else:
+                normalized_prefix = "\n"
             source_characters += 1
-            append(character)
+            append_normalized(normalized_prefix)
+            if not decoded:
+                return
+        if decoded.endswith("\r"):
+            pending_carriage_return = True
+            decoded = decoded[:-1]
+            if not decoded:
+                return
+        normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
+        source_characters += len(normalized)
+        append_normalized(normalized)
 
     total_bytes_read = 0
     try:
@@ -238,12 +264,17 @@ def read_validated_text(file_descriptor: int, limit: int) -> tuple[str, bool, Av
         consume(decoder.decode(b"", final=True))
         if pending_carriage_return:
             source_characters += 1
-            append("\n")
+            append_normalized("\n")
     except UnicodeDecodeError:
         return "", False, Availability.ENCODING, 0
     except OSError:
         return "", False, Availability.UNREADABLE, 0
 
     if overflow:
-        del capture[last_line_boundary:]
-    return capture.decode("utf-8"), overflow, Availability.PRESENT, source_characters
+        if last_line_boundary_chunks == 0 and not last_line_boundary_tail:
+            return "", True, Availability.PRESENT, source_characters
+        retained = chunks[:last_line_boundary_chunks]
+        if last_line_boundary_tail:
+            retained.append(last_line_boundary_tail)
+        return "".join(retained), True, Availability.PRESENT, source_characters
+    return "".join(chunks), False, Availability.PRESENT, source_characters

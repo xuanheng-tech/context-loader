@@ -86,7 +86,7 @@ def test_discovery_rejects_non_worktree_directories(tmp_path: Path, bare: bool) 
     with pytest.raises(git.ContextLoaderError) as caught:
         git.discover_repository(tmp_path)
     assert caught.value.exit_code == 2
-    assert str(caught.value) == "--repo must be the canonical root of a non-bare Git worktree"
+    assert str(caught.value) == "--repo must name a directory inside a non-bare Git worktree"
 
 
 def _assert_reaped(process: subprocess.Popen[bytes]) -> None:

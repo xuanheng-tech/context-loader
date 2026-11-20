@@ -27,4 +27,4 @@ Regenerate with `uv lock --no-config --default-index https://pypi.org/simple`; l
 configuration is not part of the public project lockfile.
 
 Contributions are provided under the project's [Apache-2.0 license](LICENSE).
-Follow [SECURITY.md](SECURITY.md) for security reports and README for release controls.
+Follow [SECURITY.md](SECURITY.md) for security reports and [docs/reference.md](docs/reference.md) for release controls.

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import tomllib
+from collections import deque
+from dataclasses import replace
 from pathlib import Path
 
 from .agents import (
@@ -36,13 +37,14 @@ from .model import (
 )
 from .model import (
     AGENTS_SCAN_LIMIT_BYTES,
+    COMMAND_SCAN_LIMIT_BYTES,
+    DIRECTORY_TREE_EXCLUDED_DIRECTORIES,
     DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT,
     DIRECTORY_TREE_MAX_DEPTH,
     DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY,
     DIRECTORY_TREE_MAX_ITEMS,
     ENTRY_FILE_LIMIT_BYTES,
     ENTRY_FILE_SPECS,
-    FILE_SCAN_LIMIT_BYTES,
     NESTED_AGENTS_EXCLUDED_DIRECTORIES,
     NESTED_AGENTS_MAX_DEPTH,
     NESTED_AGENTS_MAX_DIRECTORIES,
@@ -62,17 +64,37 @@ from .model import (
     AgentsSelectionInputError as AgentsSelectionInputError,
 )
 
+_COMMAND_ENTRY_NAMES = frozenset(
+    {"pyproject.toml", "package.json", "justfile", "Justfile", "Makefile"}
+)
 _JUST_RECIPE_RE = re.compile(
-    r"^([A-Za-z][A-Za-z0-9_-]*)"
-    r"(?:[ \t]+(?:[+*]?[A-Za-z_][A-Za-z0-9_-]*"
-    r"(?:=(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^ \t:#]+))?))*"
+    r"^@?([A-Za-z][A-Za-z0-9_-]*)"
+    r"(?:[ \t]+(?:[+*$]*[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:=(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|`[^`\r\n]*`|[^ \t:#]+))?))*"
     r"[ \t]*:(?!=)"
+)
+_JUST_ALIAS_RE = re.compile(
+    r"^alias[ \t]+([A-Za-z][A-Za-z0-9_-]*)[ \t]*:=[ \t]*[A-Za-z_][A-Za-z0-9_-]*"
 )
 _JUST_ATTRIBUTE_RE = re.compile(r"^\[([^\]]+)\][ \t]*$")
 _MAKE_TARGET_RE = re.compile(
-    r"^([A-Za-z0-9][A-Za-z0-9_.-]*"
-    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.-]*)*)[ \t]*(?:::|:)(?![:=])"
+    r"^([A-Za-z0-9][A-Za-z0-9_./-]*"
+    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_./-]*)*)[ \t]*(?:::|:)(?![:=])"
 )
+
+
+def _strip_bom(text: str) -> str:
+    return text[1:] if text.startswith("\ufeff") else text
+
+
+def _line_prefix(content: str, limit: int) -> tuple[str, bool]:
+    encoded = content.encode("utf-8")
+    if len(encoded) <= limit:
+        return content, False
+    boundary = encoded.rfind(b"\n", 0, limit + 1)
+    if boundary < 0:
+        return "", True
+    return encoded[: boundary + 1].decode("utf-8"), True
 
 
 def _collect_root_file(root: Path, name: str, language: str, limit: int) -> CollectedFile:
@@ -81,25 +103,14 @@ def _collect_root_file(root: Path, name: str, language: str, limit: int) -> Coll
     Each availability reason is set at the moment its condition is observed, so the
     machine code and the displayed sentence can never drift apart.
     """
-    if len(Path(name).parts) != 1 or Path(name).name != name:
-        return CollectedFile(name, language, Availability.UNREADABLE)
-    path = root / name
-    if path.parent != root:
-        return CollectedFile(name, language, Availability.UNREADABLE)
     try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return CollectedFile(name, language, Availability.NOT_PRESENT)
+        root_fd = open_directory(root)
     except OSError:
         return CollectedFile(name, language, Availability.UNREADABLE)
-    if stat.S_ISLNK(metadata.st_mode):
-        return CollectedFile(name, language, Availability.SYMLINK)
-    if not stat.S_ISREG(metadata.st_mode):
-        return CollectedFile(name, language, Availability.NOT_REGULAR)
-    if metadata.st_size > FILE_SCAN_LIMIT_BYTES:
-        return CollectedFile(name, language, Availability.UNREADABLE)
-
-    file_descriptor, reason = open_bounded_regular_file(path)
+    try:
+        file_descriptor, reason = open_bounded_regular_file(name, dir_fd=root_fd)
+    finally:
+        os.close(root_fd)
     if reason is not Availability.PRESENT:
         return CollectedFile(name, language, reason)
     try:
@@ -139,7 +150,7 @@ def _selected_entry_specs(root: Path) -> tuple[tuple[str, str], ...]:
 
 def _pyproject_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
     try:
-        document = tomllib.loads(source.content)
+        document = tomllib.loads(_strip_bom(source.content))
     except (tomllib.TOMLDecodeError, ValueError):
         return (DeclaredCommand(source.name, parse_error=True),)
     project = document.get("project")
@@ -163,7 +174,7 @@ def _pyproject_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
 
 def _package_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
     try:
-        document = json.loads(source.content)
+        document = json.loads(_strip_bom(source.content))
     except (json.JSONDecodeError, ValueError):
         return (DeclaredCommand(source.name, parse_error=True),)
     if not isinstance(document, dict) or not isinstance(document.get("scripts"), dict):
@@ -179,7 +190,7 @@ def _package_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
 def _just_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
     recipes: set[str] = set()
     pending_private = False
-    for line in source.content.splitlines():
+    for line in _strip_bom(source.content).splitlines():
         if not line or line.startswith((" ", "\t", "#")):
             continue
         attribute = _JUST_ATTRIBUTE_RE.fullmatch(line)
@@ -188,6 +199,12 @@ def _just_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
             pending_private = pending_private or "private" in names
             continue
         if re.match(r"^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_-]*[ \t]*(?::=|\?=|\+=|=)", line):
+            pending_private = False
+            continue
+        alias_match = _JUST_ALIAS_RE.match(line)
+        if alias_match is not None:
+            if not pending_private:
+                recipes.add(alias_match.group(1))
             pending_private = False
             continue
         match = _JUST_RECIPE_RE.match(line)
@@ -199,7 +216,7 @@ def _just_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
 
 def _make_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
     targets: set[str] = set()
-    for line in source.content.splitlines():
+    for line in _strip_bom(source.content).splitlines():
         if not line or line.startswith((" ", "\t", "#", ".")):
             continue
         if re.match(
@@ -209,7 +226,7 @@ def _make_commands(source: CollectedFile) -> tuple[DeclaredCommand, ...]:
         match = _MAKE_TARGET_RE.match(line)
         if match is None:
             continue
-        prerequisites = line[match.end() :].split(";", 1)[0]
+        prerequisites = line[match.end() :].split("#", 1)[0].split(";", 1)[0]
         if "=" in prerequisites:
             continue
         targets.update(match.group(1).split())
@@ -298,7 +315,11 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
             incomplete.append(prefix)
             truncated = True
         directories = [
-            entry for entry in listing.entries if entry.is_directory and not entry.unclassified
+            entry
+            for entry in listing.entries
+            if entry.is_directory
+            and not entry.unclassified
+            and entry.name not in DIRECTORY_TREE_EXCLUDED_DIRECTORIES
         ]
         others = [
             entry for entry in listing.entries if not entry.is_directory or entry.unclassified
@@ -328,6 +349,8 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
             )
             add(relative(prefix, entry.name), kind)
         for name, entry_path, index in descent:
+            if len(collected) >= DIRECTORY_TREE_MAX_ITEMS and truncated:
+                break
             try:
                 child_descriptor = open_child_directory(file_descriptor, name)
             except OSError:
@@ -368,8 +391,22 @@ def _collect_directory_tree(root: Path) -> DirectoryTree:
     )
 
 
+def _open_relative_directory(root_descriptor: int, parts: tuple[str, ...]) -> int:
+    """Open a nested child directory descriptor-relative without retaining intermediate fds."""
+    current = os.dup(root_descriptor)
+    try:
+        for component in parts:
+            child = open_child_directory(current, component)
+            os.close(current)
+            current = child
+    except Exception:
+        os.close(current)
+        raise
+    return current
+
+
 def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
-    """List nested AGENTS.md paths under a bounded, contents-blind directory scan.
+    """List nested AGENTS.md paths under a bounded, contents-blind breadth-first scan.
 
     The scan reads directory entries only: it never opens a candidate file, never
     traverses a symlink, and reports truncation honestly so presence claims stay
@@ -380,72 +417,74 @@ def collect_nested_agents_presence(repository: Path) -> NestedContextPresence:
     """
     files: list[str] = []
     reported_bytes = 0
-    state = {"list_truncated": False, "scan_truncated": False, "directories": 0}
+    list_truncated = False
+    list_budget_exhausted = False
+    scan_truncated = False
+    directories = 1
 
-    def walk(directory_descriptor: int, prefix: str, depth: int) -> None:
-        nonlocal reported_bytes
-        try:
-            listing = enumerate_directory(
-                directory_descriptor, NESTED_AGENTS_MAX_ENTRIES_PER_DIRECTORY
-            )
-        except OSError:
-            state["scan_truncated"] = True
-            return
-        if listing.capped:
-            state["scan_truncated"] = True
-        subdirectories: list[tuple[str, str]] = []
-        for entry in listing.entries:
-            if entry.unclassified:
-                state["scan_truncated"] = True
-                continue
-            path = f"{prefix}/{entry.name}" if prefix else entry.name
-            if entry.is_directory:
-                if entry.name not in NESTED_AGENTS_EXCLUDED_DIRECTORIES:
-                    subdirectories.append((entry.name, path))
-                continue
-            if entry.name != "AGENTS.md" or not prefix:
-                continue
-            if len(files) >= NESTED_AGENTS_MAX_FILES:
-                state["list_truncated"] = True
-                continue
-            # Charge the array's two bracket bytes to the first entry, so the budget
-            # covers everything this list makes the document emit.
-            name_bytes = serialized_display_length(path) + (1 if files else 2)
-            if reported_bytes + name_bytes > NESTED_AGENTS_MAX_LIST_BYTES:
-                state["list_truncated"] = True
-                continue
-            reported_bytes += name_bytes
-            files.append(path)
-        for name, path in subdirectories:
-            if (
-                depth >= NESTED_AGENTS_MAX_DEPTH
-                or state["directories"] >= NESTED_AGENTS_MAX_DIRECTORIES
-            ):
-                state["scan_truncated"] = True
-                break
-            state["directories"] += 1
-            try:
-                child_descriptor = open_child_directory(directory_descriptor, name)
-            except OSError:
-                state["scan_truncated"] = True
-                continue
-            try:
-                walk(child_descriptor, path, depth + 1)
-            finally:
-                os.close(child_descriptor)
-
-    if NESTED_AGENTS_MAX_DIRECTORIES < 1:
-        return NestedContextPresence((), False, True)
-    state["directories"] = 1
     try:
         root_descriptor = open_directory(repository)
     except OSError:
         return NestedContextPresence((), False, True)
+
     try:
-        walk(root_descriptor, "", 0)
+        queue: deque[tuple[tuple[str, ...], str, int]] = deque([((), "", 0)])
+        while queue:
+            parts, prefix, depth = queue.popleft()
+            if parts:
+                try:
+                    dir_fd = _open_relative_directory(root_descriptor, parts)
+                except OSError:
+                    scan_truncated = True
+                    continue
+            else:
+                dir_fd = root_descriptor
+            try:
+                listing = enumerate_directory(dir_fd, NESTED_AGENTS_MAX_ENTRIES_PER_DIRECTORY)
+            except OSError:
+                scan_truncated = True
+                continue
+            finally:
+                if parts:
+                    os.close(dir_fd)
+            if listing.capped:
+                scan_truncated = True
+            subdirectories: list[tuple[str, str]] = []
+            for entry in listing.entries:
+                if entry.unclassified:
+                    scan_truncated = True
+                    continue
+                path = f"{prefix}/{entry.name}" if prefix else entry.name
+                if entry.is_directory:
+                    if entry.name not in NESTED_AGENTS_EXCLUDED_DIRECTORIES:
+                        subdirectories.append((entry.name, path))
+                    continue
+                if entry.name != "AGENTS.md" or not prefix:
+                    continue
+                if list_budget_exhausted or len(files) >= NESTED_AGENTS_MAX_FILES:
+                    list_truncated = True
+                    list_budget_exhausted = True
+                    continue
+                # Charge the array's two bracket bytes to the first entry, so the budget
+                # covers everything this list makes the document emit.
+                name_bytes = serialized_display_length(path) + (1 if files else 2)
+                if reported_bytes + name_bytes > NESTED_AGENTS_MAX_LIST_BYTES:
+                    list_truncated = True
+                    list_budget_exhausted = True
+                    continue
+                reported_bytes += name_bytes
+                files.append(path)
+            for name, path in subdirectories:
+                if depth >= NESTED_AGENTS_MAX_DEPTH or directories >= NESTED_AGENTS_MAX_DIRECTORIES:
+                    scan_truncated = True
+                    break
+                directories += 1
+                queue.append(((*parts, name), path, depth + 1))
     finally:
         os.close(root_descriptor)
-    return NestedContextPresence(tuple(files), state["list_truncated"], state["scan_truncated"])
+
+    files.sort()
+    return NestedContextPresence(tuple(files), list_truncated, scan_truncated)
 
 
 def collect_project_context(
@@ -469,15 +508,33 @@ def collect_project_context(
     )
     instructions = _select_agents_content(raw_instructions, signals)
     overview = _collect_root_file(repository, "README.md", "markdown", README_LIMIT_BYTES)
-    entry_files = tuple(
-        _collect_root_file(repository, name, language, ENTRY_FILE_LIMIT_BYTES)
-        for name, language in _selected_entry_specs(repository)
-    )
+    scanned_entries: list[CollectedFile] = []
+    entry_files_display: list[CollectedFile] = []
+    for name, language in _selected_entry_specs(repository):
+        scan_limit = (
+            COMMAND_SCAN_LIMIT_BYTES if name in _COMMAND_ENTRY_NAMES else ENTRY_FILE_LIMIT_BYTES
+        )
+        raw_entry = _collect_root_file(repository, name, language, scan_limit)
+        scanned_entries.append(raw_entry)
+        if not raw_entry.is_text:
+            entry_files_display.append(raw_entry)
+        else:
+            body, cut = _line_prefix(raw_entry.content, ENTRY_FILE_LIMIT_BYTES)
+            if cut or raw_entry.truncated:
+                entry_files_display.append(
+                    replace(
+                        raw_entry,
+                        content=body,
+                        truncated=True,
+                    )
+                )
+            else:
+                entry_files_display.append(raw_entry)
     return ProjectContext(
         instructions=instructions,
         overview=overview,
-        entry_files=entry_files,
-        commands=_collect_commands(entry_files),
+        entry_files=tuple(entry_files_display),
+        commands=_collect_commands(tuple(scanned_entries)),
         directory_tree=_collect_directory_tree(repository),
         nested_context=(
             collect_nested_agents_presence(repository)

@@ -15,7 +15,7 @@ set differs, as described under “Compact model consumption”. The declared co
   "schema_version": 3,
   "tool": {
     "name": "context-loader",
-    "version": "1.3.10"
+    "version": "1.4.0"
   },
   "repository": {
     "requested_path": "/canonical/requested/path",
@@ -138,7 +138,7 @@ although 1.1.0 added the top-level `statuses` key. From release 1.2.0 onward eac
 names exactly one key set, and a new number is issued whenever a key set would otherwise be reused.
 
 The JSON schema version and package version are independent: this build emits `schema_version` `3`
-for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.3.10`. Version 1
+for `--format json` and `4` for `--format json-compact`, while `tool.version` is `1.4.0`. Version 1
 and 2 are the exact shapes already published in release 1.2.0 and are never reused: because
 `nested_context` changes the default document's key set, version 3 names the current full-document
 key set and version 4 names the compact projection.
@@ -212,8 +212,11 @@ bullet is a per-component, read or capture bound, as each one states:
 - Each entry file: 8 KiB
 - All entry-file bodies: 24 KiB, including truncation markers. Room is reserved for markers
   on later text sources, so exhausting the budget never hides that their bodies were cut.
-- Declared commands: 8 KiB
-- Directory tree: 12 KiB of listing body, 300 entries, and depth 2. Each directory is
+- Declared commands: 8 KiB (extracted from up to 256 KiB of each command-bearing entry file)
+- Recent commits: 8 commits, bounded to 4 KiB (512 bytes per subject)
+- Directory tree: 12 KiB of listing body, 300 entries, and depth 2 (excluding common
+  cache/build/dependency directories such as `.venv`, `node_modules`, `__pycache__`,
+  `.pytest_cache`, `dist`, `build`, `target`). Each directory is
   retains and classifies up to 512 entries, keeping the alphabetically first names so the listing never
   depends on operating system order. A directory that holds more is reported by a single
   `Listing incomplete:` line stating the total, the limit and up to three names, and by at most

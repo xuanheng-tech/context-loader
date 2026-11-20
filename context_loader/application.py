@@ -252,6 +252,7 @@ def load_project_context(
     focus: str | None = None,
     path: str | None = None,
     include_nested_context: bool = True,
+    layout: str = "default",
 ) -> ProjectContextResult:
     """Collect one repository once and return its deterministic machine-readable result.
 
@@ -271,7 +272,7 @@ def load_project_context(
         )
     except AgentsSelectionInputError as exc:
         raise ContextLoaderError(str(exc), exit_code=2) from None
-    rendered = render_markdown_with_details(state, project)
+    rendered = render_markdown_with_details(state, project, layout=layout)
     context = rendered.output.decode("utf-8")
     rendered_bodies = rendered.source_bodies
     sources = _sources(state.repository, rendered_bodies)

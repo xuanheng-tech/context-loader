@@ -29,7 +29,7 @@ def _collect(
     return collect_project_context(repo, focus=focus, path=path).instructions
 
 
-def _long_joinquant_agents() -> str:
+def _long_vendor_agents() -> str:
     parts = [
         "# Synthetic Project\n\n",
         "## Core Rules\nCore rule must remain visible.\n\n",
@@ -42,8 +42,8 @@ def _long_joinquant_agents() -> str:
             + "\n"
         )
     parts.append(
-        "## Section 20 JoinQuant Research Notebook Imports\n"
-        "Before implementing a provider extractor, probe the actual runtime and record the callable.\n"
+        "## Section 20 Vendor Adapter Notebook Imports\n"
+        "Before implementing a connector extractor, probe the actual runtime and record the callable.\n"
     )
     return "".join(parts)
 
@@ -109,25 +109,25 @@ def test_short_agents_is_loaded_completely_with_small_head_audit(tmp_path: Path)
     assert source.selection.indexed_only_sections == ()
 
 
-def test_late_joinquant_section_is_selected_beyond_old_prefix_without_command_blocks(
+def test_late_vendor_section_is_selected_beyond_old_prefix_without_command_blocks(
     tmp_path: Path,
 ) -> None:
-    content = _long_joinquant_agents()
+    content = _long_vendor_agents()
     section_start = content.index("## Section 20")
     assert len(content[:section_start].encode("utf-8")) > AGENTS_LIMIT_BYTES
 
     source = _collect(
         tmp_path,
         content,
-        focus="JoinQuant provider notebook runtime",
-        path="scripts/joinquant_cloud/p1_minute_provider_probe.py",
+        focus="Vendor adapter notebook runtime",
+        path="scripts/vendor_cloud/p1_minute_adapter_probe.py",
     )
 
-    assert "Section 20 JoinQuant Research Notebook Imports" in source.content
+    assert "Section 20 Vendor Adapter Notebook Imports" in source.content
     assert "probe the actual runtime" in source.content
     assert "COMMAND_BODY_1_MUST_NOT_LOAD" not in source.content
     assert source.selection is not None
-    assert "focus_match" in _entry(source, "Section 20 JoinQuant Research Notebook Imports").reasons
+    assert "focus_match" in _entry(source, "Section 20 Vendor Adapter Notebook Imports").reasons
     indexed = {entry.heading for entry in source.selection.indexed_only_sections}
     assert {f"Command Block {index}" for index in range(1, 10)} <= indexed
     assert len(source.content.encode("utf-8")) < AGENTS_LIMIT_BYTES
@@ -136,13 +136,13 @@ def test_late_joinquant_section_is_selected_beyond_old_prefix_without_command_bl
 def test_fail_safe_index_contains_only_omitted_headings_not_section_bodies(
     tmp_path: Path,
 ) -> None:
-    source = _collect(tmp_path, _long_joinquant_agents())
+    source = _collect(tmp_path, _long_vendor_agents())
     assert source.selection is not None
 
     audit = render_agents_selection_audit(source.selection)
 
     assert "Additional AGENTS sections not loaded" in audit
-    assert "H2 Section 20 JoinQuant Research Notebook Imports" in audit
+    assert "H2 Section 20 Vendor Adapter Notebook Imports" in audit
     assert "probe the actual runtime" not in audit
     assert "COMMAND_BODY_2_MUST_NOT_LOAD" not in audit
     assert "Core rule must remain visible" in source.content
@@ -437,34 +437,34 @@ def test_nested_relevant_section_includes_parent_context_once(tmp_path: Path) ->
         "## Large Unrelated\n"
         + ("filler line\n" * 500)
         + "\n## Integrations\nPARENT_CONTEXT_SENTINEL\n"
-        "### JoinQuant Notebook Runtime\nCHILD_SENTINEL\n"
+        "### Vendor Notebook Runtime\nCHILD_SENTINEL\n"
     )
 
-    source = _collect(tmp_path, content, focus="JoinQuant notebook runtime")
+    source = _collect(tmp_path, content, focus="Vendor notebook runtime")
 
     assert source.content.count("PARENT_CONTEXT_SENTINEL") == 1
     assert source.content.count("CHILD_SENTINEL") == 1
     assert "parent_context" in _entry(source, "Integrations").reasons
-    assert "focus_match" in _entry(source, "JoinQuant Notebook Runtime").reasons
+    assert "focus_match" in _entry(source, "Vendor Notebook Runtime").reasons
 
 
 def test_relevant_section_over_budget_is_indexed_and_marked_budget_fallback(
     tmp_path: Path,
 ) -> None:
-    content = "# Demo\n\n## Core\ncore\n\n## JoinQuant Notebook Runtime\n" + (
-        "provider runtime payload that cannot fit\n" * 900
+    content = "# Demo\n\n## Core\ncore\n\n## Vendor Notebook Runtime\n" + (
+        "adapter runtime payload that cannot fit\n" * 900
     )
 
-    source = _collect(tmp_path, content, focus="JoinQuant notebook runtime provider")
+    source = _collect(tmp_path, content, focus="Vendor notebook runtime adapter")
 
     assert source.selection is not None
     indexed = next(
         entry
         for entry in source.selection.indexed_only_sections
-        if entry.heading == "JoinQuant Notebook Runtime"
+        if entry.heading == "Vendor Notebook Runtime"
     )
     assert indexed.reasons == ("budget_fallback",)
-    assert "provider runtime payload" not in source.content
+    assert "adapter runtime payload" not in source.content
     aggregate = len(source.content.encode("utf-8")) + len(
         render_agents_selection_audit(source.selection).encode("utf-8")
     )

@@ -18,7 +18,10 @@ AGENTS_PATH_LIMIT_BYTES = 1024
 README_LIMIT_BYTES = 16 * 1024
 ENTRY_FILE_LIMIT_BYTES = 8 * 1024
 ENTRY_FILES_TOTAL_LIMIT_BYTES = 24 * 1024
+COMMAND_SCAN_LIMIT_BYTES = 256 * 1024
 DECLARED_COMMANDS_LIMIT_BYTES = 8 * 1024
+RECENT_COMMITS_LIMIT_BYTES = 4 * 1024
+RECENT_COMMIT_SUBJECT_LIMIT_BYTES = 512
 DIRECTORY_TREE_LIMIT_BYTES = 12 * 1024
 DIRECTORY_TREE_MAX_ITEMS = 300
 DIRECTORY_TREE_MAX_DEPTH = 2
@@ -31,6 +34,25 @@ DIRECTORY_TREE_MAX_ENTRIES_PER_DIRECTORY = 512
 # completeness claim cannot itself inflate the section it describes.
 DIRECTORY_TREE_INCOMPLETE_NOTE_EXAMPLES = 3
 DIRECTORY_TREE_INCOMPLETE_STATUS_LIMIT = 8
+DIRECTORY_TREE_EXCLUDED_DIRECTORIES = frozenset(
+    {
+        ".mypy_cache",
+        ".next",
+        ".nox",
+        ".nuxt",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "site-packages",
+        "target",
+        "venv",
+    }
+)
 NESTED_AGENTS_MAX_DEPTH = 4
 NESTED_AGENTS_MAX_DIRECTORIES = 2_000
 NESTED_AGENTS_MAX_FILES = 32
